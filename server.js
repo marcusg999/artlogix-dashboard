@@ -1,9 +1,48 @@
 // ============================================================================
 // ARTLOGIX AI - DASHBOARD API SERVER
 // ============================================================================
-// File: server/index.js
-// Express.js API for triggering agents and fetching stats
+// File: server.js (Railway-safe)
 
+import express from 'express'
+import cors from 'cors'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+import { createClient } from '@supabase/supabase-js'
+import dotenv from 'dotenv'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+
+cat > temp.js << 'EOF'
+import express from 'express';
+import cors from 'cors';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// DEBUG: Log environment variables (remove after fixing)
+console.log('🔍 Environment Check:');
+console.log('SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ Set' : '❌ Missing');
+console.log('SUPABASE_SERVICE_KEY:', process.env.SUPABASE_SERVICE_KEY ? '✅ Set' : '❌ Missing');
+console.log('PORT:', process.env.PORT || '3001');
+
+const execAsync = promisify(exec);
+const app = express();
+const PORT = process.env.PORT || 3001;
+EOF
+
+# This shows what we need to add - but let me create the full fix
+Actually, let's do a complete fix with better error handling:
+bashcd ~/artlogix-ai/artlogix-dashboard
+
+# Backup current server.js
+cp server.js server.js.backup
+
+# Create new server.js with better error handling
+cat > server.js << 'EOF'
 import express from 'express';
 import cors from 'cors';
 import { exec } from 'child_process';
@@ -20,52 +59,55 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public')); // Serve dashboard HTML
+app.use(express.static('public'));
 
-// Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// Check for required environment variables
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error('❌ Missing required environment variables!');
+  console.error('SUPABASE_URL:', SUPABASE_URL ? '✅' : '❌ MISSING');
+  console.error('SUPABASE_SERVICE_KEY:', SUPABASE_KEY ? '✅' : '❌ MISSING');
+  console.error('');
+  console.error('Please set these in Railway Dashboard -> Variables tab');
+  process.exit(1);
+}
+
+// Create Supabase client
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Store running jobs
 const runningJobs = new Map();
-
-// ============================================================================
-// ROUTES
-// ============================================================================
 
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
     version: '1.0.0',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    supabase: SUPABASE_URL ? 'connected' : 'not configured'
   });
 });
 
 // Get system stats
 app.get('/api/stats', async (req, res) => {
   try {
-    // Get total prospects
     const { count: totalProspects } = await supabase
       .from('prospects')
       .select('*', { count: 'exact', head: true });
 
-    // Get hot leads (90+)
     const { count: hotLeads } = await supabase
       .from('prospects')
       .select('*', { count: 'exact', head: true })
       .gte('lead_score', 90);
 
-    // Get qualified (80-89)
     const { count: qualifiedLeads } = await supabase
       .from('prospects')
       .select('*', { count: 'exact', head: true })
       .gte('lead_score', 80)
       .lt('lead_score', 90);
 
-    // Get most recent prospect
     const { data: latestProspect } = await supabase
       .from('prospects')
       .select('created_at')
@@ -73,28 +115,17 @@ app.get('/api/stats', async (req, res) => {
       .limit(1)
       .single();
 
-    // Get prospects by agent type
-    const { data: byType } = await supabase
-      .from('prospects')
-      .select('client_type');
-
-    const typeBreakdown = {};
-    byType?.forEach(p => {
-      typeBreakdown[p.client_type] = (typeBreakdown[p.client_type] || 0) + 1;
-    });
-
     res.json({
       totalProspects: totalProspects || 0,
       hotLeads: hotLeads || 0,
       qualifiedLeads: qualifiedLeads || 0,
       lastRun: latestProspect?.created_at || null,
-      typeBreakdown,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
     console.error('Error fetching stats:', error);
-    res.status(500).json({ error: 'Failed to fetch stats' });
+    res.status(500).json({ error: 'Failed to fetch stats', details: error.message });
   }
 });
 
@@ -125,161 +156,217 @@ app.get('/api/prospects', async (req, res) => {
   }
 });
 
-// Run specific agent
-app.post('/api/run-agent', async (req, res) => {
-  const { agentId, agentName } = req.body;
-
-  if (!agentId) {
-    return res.status(400).json({ error: 'Agent ID required' });
-  }
-
-  // Check if already running
-  if (runningJobs.has(agentId)) {
-    return res.status(409).json({
-      error: 'Agent already running',
-      jobId: runningJobs.get(agentId).jobId
-    });
-  }
-
-  const jobId = `${agentId}-${Date.now()}`;
-
-  // Create job tracking
-  runningJobs.set(agentId, {
-    jobId,
-    agentId,
-    agentName,
-    startTime: new Date(),
-    status: 'running'
-  });
-
-  res.json({
-    message: `Starting ${agentName || agentId}`,
-    jobId,
-    status: 'running'
-  });
-
-  // Run agent asynchronously
-  runAgentAsync(agentId, jobId);
-});
-
 // Run all agents
 app.post('/api/run-all', async (req, res) => {
-  const jobId = `all-${Date.now()}`;
-
   res.json({
-    message: 'Starting all agents',
-    jobId,
-    status: 'running'
+    message: 'Agent execution not available in this deployment',
+    note: 'Run agents locally with: npm run agents'
   });
-
-  // Run all agents asynchronously
-  runAllAgentsAsync(jobId);
 });
 
-// Get job status
-app.get('/api/job/:jobId', (req, res) => {
-  const { jobId } = req.params;
-  
-  // Search for job in running jobs
-  for (const [agentId, job] of runningJobs.entries()) {
-    if (job.jobId === jobId) {
-      return res.json(job);
-    }
-  }
-
-  res.status(404).json({ error: 'Job not found' });
+// Start server
+app.listen(PORT, () => {
+  console.log(`
+╔════════════════════════════════════════════════════════════╗
+║          ARTLOGIX AI - DASHBOARD API                       ║
+║  Server: http://localhost:${PORT}                           ║
+╚════════════════════════════════════════════════════════════╝
+  `);
+  console.log('✅ Supabase connected');
+  console.log('🚀 Server ready');
 });
 
-// Get activity logs
-app.get('/api/logs', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 100;
-
-    // Get recent outreach logs
-    const { data: logs, error } = await supabase
-      .from('outreach_log')
-      .select(`
-        *,
-        prospects (name, client_type, lead_score)
-      `)
-      .order('sent_at', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-
-    res.json({
-      logs: logs || [],
-      count: logs?.length || 0,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    console.error('Error fetching logs:', error);
-    res.status(500).json({ error: 'Failed to fetch logs' });
-  }
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, closing server...');
+  process.exit(0);
 });
+EOF
 
-// ============================================================================
-// AGENT EXECUTION
-// ============================================================================
+dotenv.config()
 
-async function runAgentAsync(agentId, jobId) {
-  const job = runningJobs.get(agentId);
-  
-  try {
-    console.log(`[${jobId}] Starting agent: ${agentId}`);
+// ---------------------------------------------------------------------------
+// ENV VALIDATION (FAIL FAST)
+// --------------------------------------------------------------------------
 
-    // Run the agent script
-    // Adjust path to your agents file
-    const command = `cd /Users/marcusgray/artlogix-ai && npm run agents`;
-    
-    const { stdout, stderr } = await execAsync(command, {
-      timeout: 3600000 // 1 hour timeout
-    });
+const REQUIRED_ENVS = [
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_ROLE_KEY'
+]
 
-    console.log(`[${jobId}] Agent completed:`, stdout);
-
-    if (job) {
-      job.status = 'completed';
-      job.endTime = new Date();
-      job.output = stdout;
-      
-      // Clean up after 5 minutes
-      setTimeout(() => {
-        runningJobs.delete(agentId);
-      }, 300000);
-    }
-
-  } catch (error) {
-    console.error(`[${jobId}] Agent failed:`, error);
-    
-    if (job) {
-      job.status = 'failed';
-      job.endTime = new Date();
-      job.error = error.message;
-      
-      // Clean up after 5 minutes
-      setTimeout(() => {
-        runningJobs.delete(agentId);
-      }, 300000);
-    }
+for (const key of REQUIRED_ENVS) {
+  if (!process.env[key]) {
+    console.error(`❌ Missing required env var: ${key}`)
+    process.exit(1)
   }
 }
 
-async function runAllAgentsAsync(jobId) {
+
+// ---------------------------------------------------------------------------
+// SETUP
+// ---------------------------------------------------------------------------
+
+const execAsync = promisify(exec)
+const app = express()
+const PORT = process.env.PORT || 3001
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+// Middleware
+app.use(cors())
+app.use(express.json())
+app.use(express.static('public'))
+
+// ---------------------------------------------------------------------------
+// SUPABASE CLIENT (SERVICE ROLE)
+// ---------------------------------------------------------------------------
+
+console.log('Railway ENV check:', {
+  url: process.env.SUPABASE_URL ? '✅' : '❌',
+  serviceRole: process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'
+});
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: { persistSession: false }
+  }
+);
+
+
+
+
+
+// ---------------------------------------------------------------------------
+// JOB TRACKING
+// ---------------------------------------------------------------------------
+
+const runningJobs = new Map()
+
+// ============================================================================
+// ROUTES
+// ============================================================================
+
+// Health check
+app.get('/api/health', (_, res) => {
+  res.json({
+    status: 'online',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// STATS
+// ---------------------------------------------------------------------------
+
+app.get('/api/stats', async (_, res) => {
   try {
-    console.log(`[${jobId}] Starting all agents`);
+    const { count: totalProspects } = await supabase
+      .from('prospects')
+      .select('*', { count: 'exact', head: true })
 
-    const command = `cd /Users/marcusgray/artlogix-ai && npm run agents`;
-    
-    const { stdout, stderr } = await execAsync(command, {
-      timeout: 7200000 // 2 hour timeout for all agents
-    });
+    const { count: hotLeads } = await supabase
+      .from('prospects')
+      .select('*', { count: 'exact', head: true })
+      .gte('lead_score', 90)
 
-    console.log(`[${jobId}] All agents completed:`, stdout);
+    const { count: qualifiedLeads } = await supabase
+      .from('prospects')
+      .select('*', { count: 'exact', head: true })
+      .gte('lead_score', 80)
+      .lt('lead_score', 90)
 
-  } catch (error) {
-    console.error(`[${jobId}] All agents failed:`, error);
+    const { data: latestProspect } = await supabase
+      .from('prospects')
+      .select('created_at')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    const { data: byType } = await supabase
+      .from('prospects')
+      .select('client_type')
+
+    const typeBreakdown = {}
+    byType?.forEach(p => {
+      typeBreakdown[p.client_type] =
+        (typeBreakdown[p.client_type] || 0) + 1
+    })
+
+    res.json({
+      totalProspects: totalProspects || 0,
+      hotLeads: hotLeads || 0,
+      qualifiedLeads: qualifiedLeads || 0,
+      lastRun: latestProspect?.created_at || null,
+      typeBreakdown,
+      timestamp: new Date().toISOString()
+    })
+  } catch (err) {
+    console.error('Stats error:', err)
+    res.status(500).json({ error: 'Failed to fetch stats' })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// PROSPECTS
+// ---------------------------------------------------------------------------
+
+app.get('/api/prospects', async (req, res) => {
+  try {
+    const limit = Number(req.query.limit) || 50
+    const minScore = Number(req.query.minScore) || 0
+
+    const { data, error } = await supabase
+      .from('prospects')
+      .select('*')
+      .gte('lead_score', minScore)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) throw error
+
+    res.json({
+      prospects: data || [],
+      count: data?.length || 0,
+      timestamp: new Date().toISOString()
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch prospects' })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// AGENT EXECUTION (RAILWAY SAFE)
+// ---------------------------------------------------------------------------
+
+async function runAgentAsync(agentId, jobId) {
+  const job = runningJobs.get(agentId)
+
+  try {
+    console.log(`[${jobId}] Running agent ${agentId}`)
+
+    const command = `npm run agents`
+
+    const { stdout } = await execAsync(command, {
+      cwd: __dirname,
+      timeout: 60 * 60 * 1000
+    })
+
+    job.status = 'completed'
+    job.output = stdout
+    job.endTime = new Date()
+
+    setTimeout(() => runningJobs.delete(agentId), 300_000)
+  } catch (err) {
+    console.error(`[${jobId}] Failed`, err)
+    job.status = 'failed'
+    job.error = err.message
+    job.endTime = new Date()
+
+    setTimeout(() => runningJobs.delete(agentId), 300_000)
   }
 }
 
@@ -290,23 +377,9 @@ async function runAllAgentsAsync(jobId) {
 app.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║          ARTLOGIX AI - DASHBOARD API                       ║
-║                                                            ║
-║  API Server: http://localhost:${PORT}                      ║
-║  Dashboard: http://localhost:${PORT}/                      ║
-║                                                            ║
+║        ARTLOGIX AI – DASHBOARD API (Railway)              ║
 ╚════════════════════════════════════════════════════════════╝
-  `);
-  console.log('🚀 Server ready for agent control');
-  console.log('📊 Dashboard available at http://localhost:' + PORT);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, closing server...');
-  app.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
+🚀 Port: ${PORT}
+🧠 Supabase: Connected
+  `)
+})
