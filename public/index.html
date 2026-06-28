@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ArtLogix AI - Agent Control Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -632,6 +634,197 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        /* Prospects Table */
+        .prospects-section {
+            margin-top: 3rem;
+            animation: fadeIn 0.8s ease-out 0.8s both;
+        }
+
+        .prospects-toolbar {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 1.5rem;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 0.6rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 0.875rem;
+            transition: border-color 0.2s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+        }
+
+        .filter-select {
+            padding: 0.6rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+        }
+
+        .table-wrap {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .prospects-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        .prospects-table thead {
+            background: var(--bg-secondary);
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        .prospects-table th {
+            padding: 0.9rem 1.2rem;
+            text-align: left;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .prospects-table th:hover {
+            color: var(--accent-primary);
+        }
+
+        .prospects-table td {
+            padding: 0.85rem 1.2rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-secondary);
+            vertical-align: middle;
+        }
+
+        .prospects-table tr:hover td {
+            background: rgba(0, 255, 136, 0.03);
+            color: var(--text-primary);
+        }
+
+        .prospect-name {
+            font-weight: 600;
+            color: var(--text-primary);
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 44px;
+            height: 24px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+
+        .score-hot    { background: rgba(0,255,136,0.15); color: #00ff88; }
+        .score-warm   { background: rgba(245,158,11,0.15); color: #f59e0b; }
+        .score-new    { background: rgba(99,102,241,0.15); color: #818cf8; }
+
+        .status-pill {
+            display: inline-block;
+            padding: 0.2rem 0.65rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-hot       { background: rgba(0,255,136,0.12); color: #00ff88; }
+        .status-qualified { background: rgba(245,158,11,0.12); color: #f59e0b; }
+        .status-new       { background: rgba(99,102,241,0.12); color: #818cf8; }
+
+        .contact-link {
+            color: var(--accent-secondary);
+            text-decoration: none;
+            font-size: 0.8rem;
+        }
+
+        .contact-link:hover { text-decoration: underline; }
+
+        .value-cell {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-primary);
+            font-size: 0.82rem;
+        }
+
+        .table-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.2rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .pagination {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .page-btn {
+            padding: 0.35rem 0.75rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .page-btn:hover, .page-btn.active {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        .page-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
     </style>
 </head>
 <body>
@@ -718,6 +911,62 @@
                 <div class="log-entry">
                     <div class="log-time">--:--:--</div>
                     <div class="log-message">System initialized. Ready to run agents.</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Prospects Table -->
+        <section class="prospects-section">
+            <div class="section-header">
+                <h2 class="section-title">Prospects</h2>
+                <div style="display:flex;gap:0.75rem;">
+                    <button class="btn btn-secondary btn-small" onclick="loadProspects()">
+                        ↻ Refresh
+                    </button>
+                    <button class="btn btn-primary btn-small" onclick="downloadPDF()">
+                        ⬇ Download PDF
+                    </button>
+                </div>
+            </div>
+            <div class="prospects-toolbar">
+                <input class="search-input" id="prospectSearch" type="text"
+                       placeholder="Search by name or email..." oninput="filterProspects()">
+                <select class="filter-select" id="filterStatus" onchange="filterProspects()">
+                    <option value="">All Statuses</option>
+                    <option value="Hot Lead">Hot Lead</option>
+                    <option value="Qualified">Qualified</option>
+                    <option value="New">New</option>
+                </select>
+                <select class="filter-select" id="filterType" onchange="filterProspects()">
+                    <option value="">All Types</option>
+                    <option value="Museum">Museum</option>
+                    <option value="Gallery">Gallery</option>
+                    <option value="Auction">Auction</option>
+                    <option value="Art Fair">Art Fair</option>
+                    <option value="Collector">Collector</option>
+                    <option value="Press">Press</option>
+                </select>
+            </div>
+            <div class="table-wrap">
+                <table class="prospects-table">
+                    <thead>
+                        <tr>
+                            <th onclick="sortProspects('name')">Name ↕</th>
+                            <th onclick="sortProspects('client_type')">Type ↕</th>
+                            <th onclick="sortProspects('lead_score')">Score ↕</th>
+                            <th onclick="sortProspects('status')">Status ↕</th>
+                            <th>Contact</th>
+                            <th onclick="sortProspects('estimated_value')">Value ↕</th>
+                            <th onclick="sortProspects('timeline_months')">Timeline ↕</th>
+                        </tr>
+                    </thead>
+                    <tbody id="prospectsTableBody">
+                        <tr><td colspan="7" class="empty-state">Loading prospects...</td></tr>
+                    </tbody>
+                </table>
+                <div class="table-footer">
+                    <span id="prospectsCount">—</span>
+                    <div class="pagination" id="pagination"></div>
                 </div>
             </div>
         </section>
@@ -824,13 +1073,70 @@
             webhookUrl: ''
         };
 
+        function downloadPDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+            const now = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+            doc.setFontSize(18);
+            doc.setTextColor(0, 255, 136);
+            doc.text('ArtLogix AI — Prospects Report', 40, 40);
+            doc.setFontSize(10);
+            doc.setTextColor(155, 163, 175);
+            doc.text(`Generated ${now}  ·  ${filteredProspects.length} prospects`, 40, 58);
+
+            const rows = filteredProspects.map(p => [
+                p.name || '—',
+                p.client_type || '—',
+                p.lead_score ?? '—',
+                p.status || '—',
+                p.contact_email || '—',
+                p.contact_phone || '—',
+                p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—',
+                p.timeline_months ? p.timeline_months + ' mo' : '—',
+            ]);
+
+            doc.autoTable({
+                startY: 72,
+                head: [['Name', 'Type', 'Score', 'Status', 'Email', 'Phone', 'Value', 'Timeline']],
+                body: rows,
+                theme: 'grid',
+                styles: { fontSize: 8, cellPadding: 5, textColor: [232, 234, 237], fillColor: [26, 31, 46] },
+                headStyles: { fillColor: [19, 24, 33], textColor: [0, 255, 136], fontStyle: 'bold' },
+                alternateRowStyles: { fillColor: [22, 27, 40] },
+                columnStyles: {
+                    0: { cellWidth: 160 },
+                    2: { halign: 'center', cellWidth: 45 },
+                    6: { halign: 'right', cellWidth: 70 },
+                    7: { halign: 'center', cellWidth: 55 },
+                },
+                didParseCell(data) {
+                    if (data.section === 'body' && data.column.index === 2) {
+                        const score = Number(data.cell.raw);
+                        data.cell.styles.textColor = score >= 90 ? [0, 255, 136] : score >= 80 ? [245, 158, 11] : [129, 140, 248];
+                        data.cell.styles.fontStyle = 'bold';
+                    }
+                }
+            });
+
+            const pageCount = doc.internal.getNumberOfPages();
+            for (let i = 1; i <= pageCount; i++) {
+                doc.setPage(i);
+                doc.setFontSize(8);
+                doc.setTextColor(107, 114, 128);
+                doc.text(`Page ${i} of ${pageCount}`, doc.internal.pageSize.getWidth() - 80, doc.internal.pageSize.getHeight() - 20);
+            }
+
+            doc.save(`artlogix-prospects-${new Date().toISOString().slice(0, 10)}.pdf`);
+            addLog(`PDF downloaded — ${filteredProspects.length} prospects exported`, 'success');
+        }
+
         // Initialize
         function init() {
             renderAgents();
             loadConfig();
             loadStats();
-            
-            // Simulate real-time updates
+            loadProspects();
             setInterval(updateClock, 1000);
         }
 
@@ -955,14 +1261,123 @@
             */
         }
 
-        function loadStats() {
-            // Simulate loading stats from API
-            // In production, fetch from your backend
-            document.getElementById('totalProspects').textContent = '347';
-            document.getElementById('hotLeads').textContent = '58';
-            document.getElementById('qualifiedLeads').textContent = '114';
-            document.getElementById('lastRun').textContent = formatTime(new Date());
-            document.getElementById('lastRunStatus').innerHTML = '↗ <span class="highlight">+89</span> vs last run';
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('totalProspects').textContent = data.totalProspects ?? 0;
+                document.getElementById('hotLeads').textContent = data.hotLeads ?? 0;
+                document.getElementById('qualifiedLeads').textContent = data.qualifiedLeads ?? 0;
+                document.getElementById('lastRun').textContent = data.lastRun ? formatTime(new Date(data.lastRun)) : 'Never';
+                document.getElementById('lastRunStatus').innerHTML = data.totalProspects ? `↗ ${data.totalProspects} total prospects` : 'No data yet';
+            } catch (e) {
+                console.error('Stats load failed', e);
+            }
+        }
+
+        // Prospects table state
+        let allProspects = [];
+        let filteredProspects = [];
+        let currentPage = 1;
+        const PAGE_SIZE = 20;
+        let sortKey = 'lead_score';
+        let sortDir = -1;
+
+        async function loadProspects() {
+            const tbody = document.getElementById('prospectsTableBody');
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Loading...</td></tr>';
+            try {
+                const res = await fetch('/api/prospects?limit=500');
+                const data = await res.json();
+                allProspects = (data.prospects || []).sort((a, b) => (b.lead_score ?? 0) - (a.lead_score ?? 0));
+                filterProspects();
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load prospects.</td></tr>';
+            }
+        }
+
+        function filterProspects() {
+            const search = document.getElementById('prospectSearch').value.toLowerCase();
+            const status = document.getElementById('filterStatus').value;
+            const type   = document.getElementById('filterType').value;
+
+            filteredProspects = allProspects.filter(p => {
+                const matchSearch = !search ||
+                    (p.name || '').toLowerCase().includes(search) ||
+                    (p.contact_email || '').toLowerCase().includes(search);
+                const matchStatus = !status || p.status === status;
+                const matchType   = !type   || p.client_type === type;
+                return matchSearch && matchStatus && matchType;
+            });
+
+            sortProspects(sortKey, true);
+        }
+
+        function sortProspects(key, preserveDir = false) {
+            if (!preserveDir) {
+                sortDir = (sortKey === key) ? -sortDir : -1;
+                sortKey = key;
+            }
+            filteredProspects.sort((a, b) => {
+                const av = a[key] ?? '';
+                const bv = b[key] ?? '';
+                return av < bv ? sortDir : av > bv ? -sortDir : 0;
+            });
+            currentPage = 1;
+            renderProspectsTable();
+        }
+
+        function renderProspectsTable() {
+            const tbody = document.getElementById('prospectsTableBody');
+            const start = (currentPage - 1) * PAGE_SIZE;
+            const page  = filteredProspects.slice(start, start + PAGE_SIZE);
+
+            if (!page.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No prospects match your filters.</td></tr>';
+                document.getElementById('prospectsCount').textContent = '0 prospects';
+                document.getElementById('pagination').innerHTML = '';
+                return;
+            }
+
+            tbody.innerHTML = page.map(p => {
+                const score = p.lead_score ?? 0;
+                const scoreClass = score >= 90 ? 'score-hot' : score >= 80 ? 'score-warm' : 'score-new';
+                const statusClass = p.status === 'Hot Lead' ? 'status-hot' : p.status === 'Qualified' ? 'status-qualified' : 'status-new';
+                const value = p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—';
+                const timeline = p.timeline_months ? p.timeline_months + 'mo' : '—';
+                const contact = p.contact_email
+                    ? `<a class="contact-link" href="mailto:${p.contact_email}">${p.contact_email}</a>`
+                    : '—';
+                return `<tr>
+                    <td><div class="prospect-name" title="${p.name || ''}">${p.name || '—'}</div></td>
+                    <td>${p.client_type || '—'}</td>
+                    <td><span class="score-badge ${scoreClass}">${score}</span></td>
+                    <td><span class="status-pill ${statusClass}">${p.status || '—'}</span></td>
+                    <td>${contact}</td>
+                    <td class="value-cell">${value}</td>
+                    <td>${timeline}</td>
+                </tr>`;
+            }).join('');
+
+            const total = filteredProspects.length;
+            const pages = Math.ceil(total / PAGE_SIZE);
+            document.getElementById('prospectsCount').textContent =
+                `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, total)} of ${total} prospects`;
+
+            const pag = document.getElementById('pagination');
+            pag.innerHTML = `
+                <button class="page-btn" onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>‹ Prev</button>
+                <span class="page-btn active">${currentPage} / ${pages}</span>
+                <button class="page-btn" onclick="changePage(${currentPage + 1})" ${currentPage >= pages ? 'disabled' : ''}>Next ›</button>
+            `;
+        }
+
+        function changePage(page) {
+            const pages = Math.ceil(filteredProspects.length / PAGE_SIZE);
+            if (page < 1 || page > pages) return;
+            currentPage = page;
+            renderProspectsTable();
+            document.querySelector('.prospects-section').scrollIntoView({ behavior: 'smooth' });
         }
 
         function addLog(message, type = 'info') {
