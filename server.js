@@ -42,6 +42,10 @@ const PORT = process.env.PORT || 3001
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// Directory of the ArtLogix agents repo (where `npm run agents` is defined).
+// Defaults to a sibling `artlogixai` checkout; override with AGENTS_DIR.
+const AGENTS_DIR = process.env.AGENTS_DIR || path.resolve(__dirname, '..', 'artlogixai')
+
 // Middleware
 app.use(cors())
 app.use(express.json())
@@ -172,6 +176,56 @@ app.get('/api/prospects', async (req, res) => {
 // AGENT EXECUTION (RAILWAY SAFE)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// RUN AGENTS
+// ---------------------------------------------------------------------------
+//
+// Kicks off `npm run agents` in the ArtLogix agents repo (AGENTS_DIR) in the
+// background and returns immediately. The agents run ALL sources (museums,
+// 111 galleries, auctions, fairs, collectors, press) and write straight to
+// Supabase — this can take several minutes and consumes Firecrawl/Anthropic
+// credits, so it is de-duplicated per agentId while a run is in flight.
+
+app.post('/api/run-agent', (req, res) => {
+  const agentId = req.body?.agentId || 'all'
+
+  const existing = runningJobs.get(agentId)
+  if (existing && existing.status === 'running') {
+    return res.status(409).json({
+      status: 'already_running',
+      agentId,
+      jobId: existing.jobId,
+      startTime: existing.startTime
+    })
+  }
+
+  const jobId = `${agentId}-${Date.now()}`
+  runningJobs.set(agentId, {
+    jobId,
+    agentId,
+    status: 'running',
+    startTime: new Date()
+  })
+
+  // Fire and forget — the client polls GET /api/run-agent/:agentId for status.
+  runAgentAsync(agentId, jobId)
+
+  res.json({
+    status: 'started',
+    agentId,
+    jobId,
+    message: `Agents are running (cwd: ${AGENTS_DIR}). Results are written to Supabase.`,
+    timestamp: new Date().toISOString()
+  })
+})
+
+// Poll a run's status.
+app.get('/api/run-agent/:agentId', (req, res) => {
+  const job = runningJobs.get(req.params.agentId)
+  if (!job) return res.status(404).json({ status: 'not_found' })
+  res.json(job)
+})
+
 async function runAgentAsync(agentId, jobId) {
   const job = runningJobs.get(agentId)
 
@@ -181,7 +235,7 @@ async function runAgentAsync(agentId, jobId) {
     const command = `npm run agents`
 
     const { stdout } = await execAsync(command, {
-      cwd: __dirname,
+      cwd: AGENTS_DIR,
       timeout: 60 * 60 * 1000
     })
 
