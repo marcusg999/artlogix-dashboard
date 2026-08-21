@@ -1068,7 +1068,7 @@
 
         // State
         let config = {
-            apiEndpoint: 'https://artlogix-dashboard-production.up.railway.app/api',  // Pre-configured!
+            apiEndpoint: '/api',  // Same-origin: the dashboard's own server.js (POST /api/run-agent)
             apiKey: '',
             webhookUrl: ''
         };
@@ -1203,16 +1203,18 @@
             addLog(`Starting ${agent.name}...`);
 
             try {
-                // Simulate API call - replace with actual endpoint
-                await simulateAgentRun(agent);
-                
+                const result = await triggerAgentRun(agent);
+
                 agent.lastRun = new Date();
-                agent.prospectsFound = Math.floor(Math.random() * 50) + 10;
-                
                 renderAgents();
-                addLog(`${agent.name} completed. Found ${agent.prospectsFound} prospects.`, 'success');
+
+                if (result.status === 'already_running') {
+                    addLog(`Agents already running — request de-duplicated.`, 'info');
+                } else {
+                    addLog(`Agents triggered (${result.jobId}). Running in the background; new prospects will appear in Supabase.`, 'success');
+                }
             } catch (error) {
-                addLog(`${agent.name} failed: ${error.message}`, 'error');
+                addLog(`${agent.name} failed to start: ${error.message}`, 'error');
             } finally {
                 card.classList.remove('running');
             }
@@ -1237,28 +1239,24 @@
             addLog(`All agents completed. Check database for results.`, 'success');
         }
 
-        function simulateAgentRun(agent) {
-            // Simulate API call - replace with actual fetch to your backend
-            return new Promise((resolve) => {
-                setTimeout(() => {
-                    resolve({ success: true, prospects: Math.floor(Math.random() * 50) + 10 });
-                }, 2000 + Math.random() * 3000);
-            });
-            
-            /* 
-            // Real implementation would be:
-            return fetch(`${config.apiEndpoint}/run-agent`, {
+        // Triggers a real agent run on the backend (POST /api/run-agent).
+        // The agents repo runs ALL sources in one batch, so every trigger uses
+        // agentId 'all'; the backend de-duplicates concurrent requests (HTTP 409),
+        // which is treated as success here.
+        async function triggerAgentRun(agent) {
+            const res = await fetch(`${config.apiEndpoint}/run-agent`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${config.apiKey}`
+                    ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {})
                 },
-                body: JSON.stringify({
-                    agentId: agent.id,
-                    agentName: agent.name
-                })
-            }).then(res => res.json());
-            */
+                body: JSON.stringify({ agentId: 'all', agentName: agent.name })
+            });
+
+            if (!res.ok && res.status !== 409) {
+                throw new Error(`Backend returned HTTP ${res.status}`);
+            }
+            return res.json();
         }
 
         async function loadStats() {
