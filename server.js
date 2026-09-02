@@ -218,10 +218,31 @@ app.post('/api/run-agent', (req, res) => {
 })
 
 // Poll a run's status.
+//
+// A run's output reaches hundreds of KB and the dashboard polls this every few
+// seconds to show live progress, so the whole buffer must not be re-sent each
+// time. Callers pass ?since=<offset> and get only what was appended after it,
+// plus the new absolute offset to send next time.
 app.get('/api/run-agent/:agentId', (req, res) => {
   const job = runningJobs.get(req.params.agentId)
   if (!job) return res.status(404).json({ status: 'not_found' })
-  res.json(job)
+
+  const dropped = job.outputOffset || 0
+  const buffer = job.output || ''
+  // Never rewind past what is still buffered, and never re-send what the caller
+  // already has.
+  const from = Math.min(Math.max(Number(req.query.since) || 0, dropped), dropped + buffer.length)
+
+  res.json({
+    jobId: job.jobId,
+    agentId: job.agentId,
+    status: job.status,
+    startTime: job.startTime,
+    endTime: job.endTime,
+    error: job.error,
+    output: buffer.slice(from - dropped),
+    outputLength: dropped + buffer.length
+  })
 })
 
 async function runAgentAsync(agentId, jobId) {
@@ -251,15 +272,26 @@ async function runAgentAsync(agentId, jobId) {
       }
     }
 
-    let stdout = ''
-    child.stdout?.on('data', chunk => {
-      stdout += chunk
-      relay(process.stdout, chunk)
-    })
-    child.stderr?.on('data', chunk => {
-      stdout += chunk
-      relay(process.stderr, chunk)
-    })
+    // Append to job.output as it arrives (rather than only at exit) so the
+    // dashboard can show the run live instead of waiting for it to finish.
+    // Keep the buffer bounded, tracking how much was dropped so ?since= offsets
+    // stay correct across truncation.
+    const MAX_BUFFERED = 1024 * 1024
+    job.output = ''
+    job.outputOffset = 0
+
+    const capture = (stream, chunk) => {
+      job.output += chunk
+      if (job.output.length > MAX_BUFFERED) {
+        const excess = job.output.length - MAX_BUFFERED
+        job.output = job.output.slice(excess)
+        job.outputOffset += excess
+      }
+      relay(stream, chunk)
+    }
+
+    child.stdout?.on('data', chunk => capture(process.stdout, chunk))
+    child.stderr?.on('data', chunk => capture(process.stderr, chunk))
 
     await new Promise((resolve, reject) => {
       child.on('error', reject)
@@ -269,7 +301,6 @@ async function runAgentAsync(agentId, jobId) {
     })
 
     job.status = 'completed'
-    job.output = stdout
     job.endTime = new Date()
 
     setTimeout(() => runningJobs.delete(agentId), 300_000)
