@@ -6,7 +6,6 @@
 import express from 'express'
 import cors from 'cors'
 import { exec } from 'child_process'
-import { promisify } from 'util'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
 import path from 'path'
@@ -35,7 +34,6 @@ for (const key of REQUIRED_ENVS) {
 // SETUP
 // ---------------------------------------------------------------------------
 
-const execAsync = promisify(exec)
 const app = express()
 const PORT = process.env.PORT || 3001
 
@@ -234,9 +232,40 @@ async function runAgentAsync(agentId, jobId) {
 
     const command = `npm run agents`
 
-    const { stdout } = await execAsync(command, {
+    // execAsync buffers output instead of showing it, so a run triggered from the
+    // dashboard was completely opaque: agent progress, warnings and errors all went
+    // into job.output and were never displayed. Stream both pipes to this server's
+    // console (prefixed with the job id) while still capturing them for the status
+    // endpoint, so the terminal running `npm start` shows the run as it happens.
+    const child = exec(command, {
       cwd: AGENTS_DIR,
-      timeout: 60 * 60 * 1000
+      timeout: 60 * 60 * 1000,
+      maxBuffer: 32 * 1024 * 1024
+    })
+
+    // Prefix every line (not just the first of each chunk) so the run is easy to
+    // follow and grep in a terminal that is also serving HTTP requests.
+    const relay = (stream, chunk) => {
+      for (const line of String(chunk).replace(/\n$/, '').split('\n')) {
+        stream.write(`[${jobId}] ${line}\n`)
+      }
+    }
+
+    let stdout = ''
+    child.stdout?.on('data', chunk => {
+      stdout += chunk
+      relay(process.stdout, chunk)
+    })
+    child.stderr?.on('data', chunk => {
+      stdout += chunk
+      relay(process.stderr, chunk)
+    })
+
+    await new Promise((resolve, reject) => {
+      child.on('error', reject)
+      child.on('close', code => {
+        code === 0 ? resolve() : reject(new Error(`\`${command}\` exited with code ${code}`))
+      })
     })
 
     job.status = 'completed'

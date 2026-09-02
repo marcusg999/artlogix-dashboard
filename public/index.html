@@ -1074,6 +1074,35 @@
         };
 
         function downloadPDF() {
+            // jsPDF loads from a CDN. If that request was blocked (offline, script
+            // blocker, corporate proxy) window.jspdf is undefined and the old code
+            // threw a TypeError — the button simply appeared to do nothing.
+            if (!window.jspdf || !window.jspdf.jsPDF) {
+                const msg = 'PDF export unavailable — the jsPDF library failed to load. Check your connection or a script blocker.';
+                addLog(msg, 'error');
+                alert(msg);
+                return;
+            }
+
+            // Exporting an empty table produced a valid-looking PDF with no rows,
+            // which is indistinguishable from "the agents found nothing".
+            if (!Array.isArray(filteredProspects) || filteredProspects.length === 0) {
+                const msg = 'Nothing to export — no prospects are currently listed. Run the agents, or clear your filters.';
+                addLog(msg, 'error');
+                alert(msg);
+                return;
+            }
+
+            try {
+                buildProspectsPDF();
+            } catch (err) {
+                console.error(err);
+                addLog(`PDF export failed: ${err.message}`, 'error');
+                alert(`PDF export failed: ${err.message}`);
+            }
+        }
+
+        function buildProspectsPDF() {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
 
@@ -1285,12 +1314,25 @@
             const tbody = document.getElementById('prospectsTableBody');
             tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Loading...</td></tr>';
             try {
-                const res = await fetch('/api/prospects?limit=500');
+                // limit was 500; a full multi-source run can exceed that and the PDF
+                // would silently export only the first 500 rows.
+                const res = await fetch('/api/prospects?limit=5000');
+
+                // A 500 from the API still parses as JSON ({error: ...}), so the old
+                // code fell through to an empty table and reported nothing wrong.
+                if (!res.ok) {
+                    let detail = `HTTP ${res.status}`;
+                    try { detail = (await res.json()).error || detail; } catch (_) {}
+                    throw new Error(detail);
+                }
+
                 const data = await res.json();
                 allProspects = (data.prospects || []).sort((a, b) => (b.lead_score ?? 0) - (a.lead_score ?? 0));
                 filterProspects();
+                addLog(`Loaded ${allProspects.length} prospects.`);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load prospects.</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Failed to load prospects: ${e.message}</td></tr>`;
+                addLog(`Failed to load prospects: ${e.message}`, 'error');
             }
         }
 
