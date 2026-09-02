@@ -326,6 +326,20 @@
             background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0, 255, 136, 0.05) 100%);
         }
 
+        .run-status {
+            margin: 0 0 1.25rem;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--bg-card);
+            font-size: 0.9rem;
+        }
+
+        .run-status.active {
+            border-color: var(--accent-primary);
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0, 255, 136, 0.08) 100%);
+        }
+
         .agent-header {
             display: flex;
             justify-content: space-between;
@@ -888,11 +902,13 @@
                     <button class="btn btn-secondary btn-small" onclick="toggleAllAgents(false)">
                         Disable All
                     </button>
-                    <button class="btn btn-primary" onclick="runAllAgents()">
+                    <button class="btn btn-primary" data-run-button onclick="runAllAgents()">
                         ▶️ Run All Agents
                     </button>
                 </div>
             </div>
+
+            <div class="run-status" id="runStatus" hidden></div>
 
             <div class="agents-grid" id="agentsGrid">
                 <!-- Agents will be populated by JavaScript -->
@@ -1074,6 +1090,35 @@
         };
 
         function downloadPDF() {
+            // jsPDF loads from a CDN. If that request was blocked (offline, script
+            // blocker, corporate proxy) window.jspdf is undefined and the old code
+            // threw a TypeError — the button simply appeared to do nothing.
+            if (!window.jspdf || !window.jspdf.jsPDF) {
+                const msg = 'PDF export unavailable — the jsPDF library failed to load. Check your connection or a script blocker.';
+                addLog(msg, 'error');
+                alert(msg);
+                return;
+            }
+
+            // Exporting an empty table produced a valid-looking PDF with no rows,
+            // which is indistinguishable from "the agents found nothing".
+            if (!Array.isArray(filteredProspects) || filteredProspects.length === 0) {
+                const msg = 'Nothing to export — no prospects are currently listed. Run the agents, or clear your filters.';
+                addLog(msg, 'error');
+                alert(msg);
+                return;
+            }
+
+            try {
+                buildProspectsPDF();
+            } catch (err) {
+                console.error(err);
+                addLog(`PDF export failed: ${err.message}`, 'error');
+                alert(`PDF export failed: ${err.message}`);
+            }
+        }
+
+        function buildProspectsPDF() {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
 
@@ -1137,6 +1182,7 @@
             loadConfig();
             loadStats();
             loadProspects();
+            resumeRunInProgress();
             setInterval(updateClock, 1000);
         }
 
@@ -1164,7 +1210,9 @@
                         </div>
                     </div>
                     <div class="agent-actions">
-                        <button class="btn btn-secondary btn-small" 
+                        <button class="btn btn-secondary btn-small"
+                                data-run-button
+                                title="Runs every source — the agents scrape all of them in one batch"
                                 onclick="runSingleAgent('${agent.id}')"
                                 ${!agent.enabled ? 'disabled' : ''}>
                             ▶️ Run
@@ -1176,6 +1224,13 @@
                     </div>
                 </div>
             `).join('');
+
+            // Re-rendering replaces the cards, so a run in progress would lose its
+            // highlight and its disabled buttons (e.g. after toggling an agent).
+            if (isRunActive()) {
+                document.querySelectorAll('.agent-card').forEach(card => card.classList.add('running'));
+                document.querySelectorAll('[data-run-button]').forEach(button => { button.disabled = true; });
+            }
         }
 
         function toggleAgent(agentId) {
@@ -1193,70 +1248,199 @@
             addLog(`All agents ${state ? 'enabled' : 'disabled'}`);
         }
 
-        async function runSingleAgent(agentId) {
-            const agent = agents.find(a => a.id === agentId);
-            if (!agent || !agent.enabled) return;
+        // ------------------------------------------------------------------
+        // AGENT RUNS
+        // ------------------------------------------------------------------
+        // A full run scrapes 149 sources and takes 20+ minutes (over an hour at a
+        // low FIRECRAWL_RPM). The old code fired the trigger, called loadStats()
+        // once immediately and logged "All agents completed" within a second — so
+        // an in-progress run, a finished one and a crashed one all looked the same:
+        // an empty table. Everything below tracks the run for real.
 
-            const card = document.getElementById(`agent-${agentId}`);
-            card.classList.add('running');
-            
-            addLog(`Starting ${agent.name}...`);
+        const RUN_AGENT_ID = 'all';
+        const POLL_INTERVAL_MS = 5000;
 
-            try {
-                const result = await triggerAgentRun(agent);
+        let runPollTimer = null;
+        let runOutputOffset = 0;
 
-                agent.lastRun = new Date();
-                renderAgents();
+        function isRunActive() {
+            return runPollTimer !== null;
+        }
 
-                if (result.status === 'already_running') {
-                    addLog(`Agents already running — request de-duplicated.`, 'info');
-                } else {
-                    addLog(`Agents triggered (${result.jobId}). Running in the background; new prospects will appear in Supabase.`, 'success');
-                }
-            } catch (error) {
-                addLog(`${agent.name} failed to start: ${error.message}`, 'error');
-            } finally {
-                card.classList.remove('running');
+        function setRunUI(active, statusText) {
+            document.querySelectorAll('.agent-card').forEach(card => {
+                card.classList.toggle('running', active);
+            });
+            document.querySelectorAll('[data-run-button]').forEach(button => {
+                button.disabled = active;
+            });
+
+            const banner = document.getElementById('runStatus');
+            if (!banner) return;
+            banner.hidden = !statusText;
+            banner.textContent = statusText || '';
+            banner.className = `run-status${active ? ' active' : ''}`;
+        }
+
+        function formatElapsed(startTime) {
+            const seconds = Math.max(0, Math.round((Date.now() - new Date(startTime).getTime()) / 1000));
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+            return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+        }
+
+        // Agent output lines worth surfacing in the activity log. Echoing every
+        // line would bury the log in per-source chatter.
+        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|🔥|📊 Total|✨)/u;
+
+        function relayAgentOutput(chunk) {
+            if (!chunk) return;
+            for (const line of chunk.split('\n')) {
+                const text = line.trim();
+                if (!text || !NOTABLE_LINE.test(text)) continue;
+                const type = /^(❌|⛔)/u.test(text) ? 'error'
+                    : /^(⏳|🔥)/u.test(text) ? 'info'
+                    : 'success';
+                addLog(text, type);
             }
         }
 
-        async function runAllAgents() {
+        function stopPollingRun() {
+            if (runPollTimer !== null) {
+                clearInterval(runPollTimer);
+                runPollTimer = null;
+            }
+        }
+
+        async function pollRunStatus() {
+            let job;
+            try {
+                const res = await fetch(
+                    `${config.apiEndpoint}/run-agent/${RUN_AGENT_ID}?since=${runOutputOffset}`
+                );
+
+                if (res.status === 404) {
+                    // The backend forgets a job 5 minutes after it ends. If we were
+                    // still watching, the run is over and we simply missed the last
+                    // poll — refresh rather than leaving a stale "running" banner.
+                    stopPollingRun();
+                    setRunUI(false, null);
+                    addLog('Run status no longer available on the server — refreshing results.', 'info');
+                    loadStats();
+                    loadProspects();
+                    return;
+                }
+
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                job = await res.json();
+            } catch (error) {
+                // A single failed poll is not a failed run; keep watching.
+                addLog(`Could not read run status: ${error.message}`, 'error');
+                return;
+            }
+
+            relayAgentOutput(job.output);
+            if (typeof job.outputLength === 'number') runOutputOffset = job.outputLength;
+
+            if (job.status === 'running') {
+                setRunUI(true, `Agents running — ${formatElapsed(job.startTime)} elapsed`);
+                // Prospects are written per agent, so rows appear during the run.
+                loadStats();
+                loadProspects();
+                return;
+            }
+
+            stopPollingRun();
+
+            if (job.status === 'completed') {
+                setRunUI(false, null);
+                addLog(`Run finished in ${formatElapsed(job.startTime)}.`, 'success');
+            } else {
+                setRunUI(false, null);
+                addLog(`Run failed: ${job.error || 'unknown error'}`, 'error');
+            }
+
+            loadStats();
+            loadProspects();
+        }
+
+        function startPollingRun() {
+            stopPollingRun();
+            runPollTimer = setInterval(pollRunStatus, POLL_INTERVAL_MS);
+            pollRunStatus();
+        }
+
+        // Every trigger runs the whole batch: the agents repo scrapes all sources in
+        // one process, so there is no per-agent entry point to call.
+        async function startAgentRun() {
             if (!config.apiEndpoint) {
                 alert('Please configure your API endpoint first');
                 openConfigModal();
                 return;
             }
 
-            addLog('Starting all enabled agents...');
-            const enabledAgents = agents.filter(a => a.enabled);
-            
-            for (const agent of enabledAgents) {
-                await runSingleAgent(agent.id);
-                await new Promise(resolve => setTimeout(resolve, 1000));
+            if (isRunActive()) {
+                addLog('A run is already in progress.', 'info');
+                return;
             }
-            
-            loadStats();
-            addLog(`All agents completed. Check database for results.`, 'success');
+
+            setRunUI(true, 'Starting agents…');
+            addLog('Starting all agents (every source runs in one batch)…');
+
+            try {
+                const res = await fetch(`${config.apiEndpoint}/run-agent`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {})
+                    },
+                    body: JSON.stringify({ agentId: RUN_AGENT_ID })
+                });
+
+                if (!res.ok && res.status !== 409) {
+                    throw new Error(`Backend returned HTTP ${res.status}`);
+                }
+
+                const result = await res.json();
+                runOutputOffset = 0;
+
+                if (result.status === 'already_running') {
+                    addLog('Agents were already running — following that run.', 'info');
+                } else {
+                    addLog(`Agents started (${result.jobId}). This takes 20+ minutes; progress appears below.`, 'success');
+                }
+
+                agents.forEach(agent => { agent.lastRun = new Date(); });
+                renderAgents();
+                startPollingRun();
+            } catch (error) {
+                setRunUI(false, null);
+                addLog(`Agents failed to start: ${error.message}`, 'error');
+            }
         }
 
-        // Triggers a real agent run on the backend (POST /api/run-agent).
-        // The agents repo runs ALL sources in one batch, so every trigger uses
-        // agentId 'all'; the backend de-duplicates concurrent requests (HTTP 409),
-        // which is treated as success here.
-        async function triggerAgentRun(agent) {
-            const res = await fetch(`${config.apiEndpoint}/run-agent`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {})
-                },
-                body: JSON.stringify({ agentId: 'all', agentName: agent.name })
-            });
+        // The per-agent Run buttons and "Run All" do the same thing; kept as
+        // separate names so existing onclick handlers keep working.
+        const runAllAgents = startAgentRun;
+        const runSingleAgent = startAgentRun;
 
-            if (!res.ok && res.status !== 409) {
-                throw new Error(`Backend returned HTTP ${res.status}`);
+        // A run outlives the page. On load, reattach to one already in flight so a
+        // refresh (or reopening the tab) doesn't look like nothing is happening.
+        async function resumeRunInProgress() {
+            try {
+                const res = await fetch(`${config.apiEndpoint}/run-agent/${RUN_AGENT_ID}`);
+                if (!res.ok) return;
+                const job = await res.json();
+                if (job.status !== 'running') return;
+
+                // Skip the backlog: replaying it would flood the log on every reload.
+                runOutputOffset = job.outputLength || 0;
+                addLog(`Reattached to a run already in progress (${formatElapsed(job.startTime)} elapsed).`, 'info');
+                startPollingRun();
+            } catch {
+                // No backend or no run — nothing to resume.
             }
-            return res.json();
         }
 
         async function loadStats() {
@@ -1285,12 +1469,25 @@
             const tbody = document.getElementById('prospectsTableBody');
             tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Loading...</td></tr>';
             try {
-                const res = await fetch('/api/prospects?limit=500');
+                // limit was 500; a full multi-source run can exceed that and the PDF
+                // would silently export only the first 500 rows.
+                const res = await fetch('/api/prospects?limit=5000');
+
+                // A 500 from the API still parses as JSON ({error: ...}), so the old
+                // code fell through to an empty table and reported nothing wrong.
+                if (!res.ok) {
+                    let detail = `HTTP ${res.status}`;
+                    try { detail = (await res.json()).error || detail; } catch (_) {}
+                    throw new Error(detail);
+                }
+
                 const data = await res.json();
                 allProspects = (data.prospects || []).sort((a, b) => (b.lead_score ?? 0) - (a.lead_score ?? 0));
                 filterProspects();
+                addLog(`Loaded ${allProspects.length} prospects.`);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load prospects.</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Failed to load prospects: ${e.message}</td></tr>`;
+                addLog(`Failed to load prospects: ${e.message}`, 'error');
             }
         }
 
