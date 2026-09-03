@@ -189,6 +189,15 @@ app.get('/api/prospects', async (req, res) => {
 const MIN_HORIZON_MONTHS = 1
 const MAX_HORIZON_MONTHS = 60
 
+// Restrict a run to sources in one region. Mirrors resolveRegionFilter() in the
+// agents repo so the dashboard can't send a value they'd ignore.
+function resolveRegion(raw) {
+  const value = String(raw ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-')
+  if (value === 'california' || value === 'ca') return 'california'
+  if (value === 'los-angeles' || value === 'la' || value === 'losangeles') return 'los-angeles'
+  return null
+}
+
 function resolveHorizonMonths(raw) {
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed <= 0) return null
@@ -202,6 +211,7 @@ app.post('/api/run-agent', (req, res) => {
   // restarting: it is passed to this run's process only, leaving .env alone.
   // Omitted (or unusable) means the agents fall back to their own default.
   const horizonMonths = resolveHorizonMonths(req.body?.horizonMonths)
+  const region = resolveRegion(req.body?.region)
 
   const existing = runningJobs.get(agentId)
   if (existing && existing.status === 'running') {
@@ -210,7 +220,8 @@ app.post('/api/run-agent', (req, res) => {
       agentId,
       jobId: existing.jobId,
       startTime: existing.startTime,
-      horizonMonths: existing.horizonMonths ?? null
+      horizonMonths: existing.horizonMonths ?? null,
+      region: existing.region ?? null
     })
   }
 
@@ -220,19 +231,22 @@ app.post('/api/run-agent', (req, res) => {
     agentId,
     status: 'running',
     startTime: new Date(),
-    horizonMonths
+    horizonMonths,
+    region
   })
 
   // Fire and forget — the client polls GET /api/run-agent/:agentId for status.
-  runAgentAsync(agentId, jobId, horizonMonths)
+  runAgentAsync(agentId, jobId, horizonMonths, region)
 
   res.json({
     status: 'started',
     agentId,
     jobId,
     horizonMonths,
+    region,
     message: `Agents are running (cwd: ${AGENTS_DIR}`
-      + `${horizonMonths ? `, looking ${horizonMonths} months ahead` : ''}). `
+      + `${horizonMonths ? `, looking ${horizonMonths} months ahead` : ''}`
+      + `${region ? `, ${region} only` : ''}). `
       + `Results are written to Supabase.`,
     timestamp: new Date().toISOString()
   })
@@ -261,19 +275,21 @@ app.get('/api/run-agent/:agentId', (req, res) => {
     startTime: job.startTime,
     endTime: job.endTime,
     horizonMonths: job.horizonMonths ?? null,
+    region: job.region ?? null,
     error: job.error,
     output: buffer.slice(from - dropped),
     outputLength: dropped + buffer.length
   })
 })
 
-async function runAgentAsync(agentId, jobId, horizonMonths) {
+async function runAgentAsync(agentId, jobId, horizonMonths, region) {
   const job = runningJobs.get(agentId)
 
   try {
     console.log(
       `[${jobId}] Running agent ${agentId}` +
-      (horizonMonths ? ` (horizon: ${horizonMonths} months)` : '')
+      (horizonMonths ? ` (horizon: ${horizonMonths} months)` : '') +
+      (region ? ` (region: ${region})` : '')
     )
 
     const command = `npm run agents`
@@ -289,8 +305,12 @@ async function runAgentAsync(agentId, jobId, horizonMonths) {
       maxBuffer: 32 * 1024 * 1024,
       // Only override HORIZON_MONTHS when one was chosen, so an unset control
       // leaves whatever the agents' own .env says intact.
-      env: horizonMonths
-        ? { ...process.env, HORIZON_MONTHS: String(horizonMonths) }
+      env: (horizonMonths || region)
+        ? {
+            ...process.env,
+            ...(horizonMonths ? { HORIZON_MONTHS: String(horizonMonths) } : {}),
+            ...(region ? { REGION: region } : {})
+          }
         : process.env
     })
 

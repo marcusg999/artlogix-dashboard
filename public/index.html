@@ -912,6 +912,15 @@
                         Disable All
                     </button>
                     <label class="run-horizon">
+                        Scrape
+                        <select class="filter-select" id="runRegion" data-run-button
+                                title="Which sources this run scrapes. Narrowing uses fewer Firecrawl requests.">
+                            <option value="">Everywhere</option>
+                            <option value="california">California only</option>
+                            <option value="los-angeles" selected>Los Angeles only</option>
+                        </select>
+                    </label>
+                    <label class="run-horizon">
                         Look ahead
                         <select class="filter-select" id="runHorizon" data-run-button
                                 title="How far ahead this run searches. Changing it needs a new run.">
@@ -1291,6 +1300,7 @@
         // an empty table. Everything below tracks the run for real.
 
         const RUN_AGENT_ID = 'all';
+        const REGION_LABELS = { 'california': 'California', 'los-angeles': 'Los Angeles' };
         const POLL_INTERVAL_MS = 5000;
 
         let runPollTimer = null;
@@ -1422,11 +1432,13 @@
             // reports its value, but read it first so the request can never
             // depend on UI state changing underneath it.
             const horizonMonths = Number(document.getElementById('runHorizon').value) || null;
+            const runRegion = document.getElementById('runRegion').value || null;
 
             setRunUI(true, 'Starting agents…');
             addLog(
                 `Starting all agents (every source runs in one batch)` +
-                `${horizonMonths ? `, looking ${horizonMonths} months ahead` : ''}…`
+                `${horizonMonths ? `, looking ${horizonMonths} months ahead` : ''}` +
+                `${runRegion ? `, ${REGION_LABELS[runRegion]} sources only` : ''}…`
             );
 
             try {
@@ -1436,7 +1448,7 @@
                         'Content-Type': 'application/json',
                         ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {})
                     },
-                    body: JSON.stringify({ agentId: RUN_AGENT_ID, horizonMonths })
+                    body: JSON.stringify({ agentId: RUN_AGENT_ID, horizonMonths, region: runRegion })
                 });
 
                 if (!res.ok && res.status !== 409) {
@@ -1456,7 +1468,8 @@
                 } else {
                     addLog(
                         `Agents started (${result.jobId})` +
-                        `${result.horizonMonths ? `, ${result.horizonMonths}-month horizon` : ''}. ` +
+                        `${result.horizonMonths ? `, ${result.horizonMonths}-month horizon` : ''}` +
+                        `${result.region ? `, ${REGION_LABELS[result.region]} only` : ''}. ` +
                         `This takes 20+ minutes; progress appears below.`,
                         'success'
                     );
@@ -1495,6 +1508,7 @@
                 if (job.horizonMonths) {
                     document.getElementById('runHorizon').value = String(job.horizonMonths);
                 }
+                document.getElementById('runRegion').value = job.region || '';
                 startPollingRun();
             } catch {
                 // No backend or no run — nothing to resume.
