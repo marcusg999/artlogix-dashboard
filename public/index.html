@@ -1335,7 +1335,16 @@
 
         // Agent output lines worth surfacing in the activity log. Echoing every
         // line would bury the log in per-source chatter.
-        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|🔥|📊 Total|✨)/u;
+        // 🗓 and 🌎 carry the run's configuration — the horizon in use and which
+        // region is being scraped, including how many sources each agent kept
+        // ("🌎 Museums: 5/38 in Los Angeles area"). Without them the log showed
+        // the agent card's hardcoded "(38)" and nothing about the real scope.
+        // ♻ reports contacts and destinations refreshed on prospects already
+        // stored — the only confirmation that a re-run repaired existing rows
+        // rather than just skipping them.
+        // Matched without the variation selector some of them carry, so the
+        // prefix test doesn't depend on it.
+        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|♻|🔥|🗓|🌎|📊 Total|✨)/u;
 
         function relayAgentOutput(chunk) {
             if (!chunk) return;
@@ -1343,7 +1352,7 @@
                 const text = line.trim();
                 if (!text || !NOTABLE_LINE.test(text)) continue;
                 const type = /^(❌|⛔)/u.test(text) ? 'error'
-                    : /^(⏳|🔥)/u.test(text) ? 'info'
+                    : /^(⏳|🔥|🗓|🌎)/u.test(text) ? 'info'
                     : 'success';
                 addLog(text, type);
             }
