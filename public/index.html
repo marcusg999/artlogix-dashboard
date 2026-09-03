@@ -972,6 +972,12 @@
                     <option value="Qualified">Qualified</option>
                     <option value="New">New</option>
                 </select>
+                <select class="filter-select" id="filterRegion" onchange="filterProspects()"
+                        title="Where the work is being shipped to">
+                    <option value="">Anywhere</option>
+                    <option value="california">California</option>
+                    <option value="los-angeles">Los Angeles area</option>
+                </select>
                 <select class="filter-select" id="filterTimeline" onchange="filterProspects()"
                         title="Filter by how soon the work moves">
                     <option value="">Any timeline</option>
@@ -1543,11 +1549,21 @@
             }
         }
 
+        // Mirrors matchesRegion() in the agents repo (src/lib/regions.ts), which
+        // stamps metadata.destination when a prospect is scraped.
+        function matchesRegion(destination, region) {
+            if (!destination) return false;
+            if (region === 'california')  return destination.state === 'CA';
+            if (region === 'los-angeles') return destination.metro === 'Los Angeles';
+            return false;
+        }
+
         function filterProspects() {
             const search = document.getElementById('prospectSearch').value.toLowerCase();
             const status = document.getElementById('filterStatus').value;
             const type   = document.getElementById('filterType').value;
             const within = Number(document.getElementById('filterTimeline').value) || 0;
+            const region = document.getElementById('filterRegion').value;
 
             filteredProspects = allProspects.filter(p => {
                 const matchSearch = !search ||
@@ -1565,7 +1581,14 @@
                 const matchTimeline = !within ||
                     (typeof months === 'number' && !Number.isNaN(months) && months >= 0 && months <= within);
 
-                return matchSearch && matchStatus && matchType && matchTimeline;
+                // Destination is the venue's own location: an exhibition in Los
+                // Angeles is work being shipped into Los Angeles. Prospects with
+                // no destination — a gallery whose exhibitions page covers
+                // several cities — are excluded once a region is chosen, since
+                // nothing establishes they belong in it.
+                const matchRegion = !region || matchesRegion(p.metadata?.destination, region);
+
+                return matchSearch && matchStatus && matchType && matchTimeline && matchRegion;
             });
 
             sortProspects(sortKey, true);
