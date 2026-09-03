@@ -326,6 +326,15 @@
             background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0, 255, 136, 0.05) 100%);
         }
 
+        .run-horizon {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            white-space: nowrap;
+        }
+
         .run-status {
             margin: 0 0 1.25rem;
             padding: 0.75rem 1rem;
@@ -902,6 +911,16 @@
                     <button class="btn btn-secondary btn-small" onclick="toggleAllAgents(false)">
                         Disable All
                     </button>
+                    <label class="run-horizon">
+                        Look ahead
+                        <select class="filter-select" id="runHorizon" data-run-button
+                                title="How far ahead this run searches. Changing it needs a new run.">
+                            <option value="6">6 months</option>
+                            <option value="12">12 months</option>
+                            <option value="24" selected>24 months</option>
+                            <option value="36">36 months</option>
+                        </select>
+                    </label>
                     <button class="btn btn-primary" data-run-button onclick="runAllAgents()">
                         ▶️ Run All Agents
                     </button>
@@ -1393,8 +1412,16 @@
                 return;
             }
 
+            // Read before disabling the control: a disabled <select> still
+            // reports its value, but read it first so the request can never
+            // depend on UI state changing underneath it.
+            const horizonMonths = Number(document.getElementById('runHorizon').value) || null;
+
             setRunUI(true, 'Starting agents…');
-            addLog('Starting all agents (every source runs in one batch)…');
+            addLog(
+                `Starting all agents (every source runs in one batch)` +
+                `${horizonMonths ? `, looking ${horizonMonths} months ahead` : ''}…`
+            );
 
             try {
                 const res = await fetch(`${config.apiEndpoint}/run-agent`, {
@@ -1403,7 +1430,7 @@
                         'Content-Type': 'application/json',
                         ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {})
                     },
-                    body: JSON.stringify({ agentId: RUN_AGENT_ID })
+                    body: JSON.stringify({ agentId: RUN_AGENT_ID, horizonMonths })
                 });
 
                 if (!res.ok && res.status !== 409) {
@@ -1414,9 +1441,19 @@
                 runOutputOffset = 0;
 
                 if (result.status === 'already_running') {
-                    addLog('Agents were already running — following that run.', 'info');
+                    addLog(
+                        `Agents were already running — following that run` +
+                        `${result.horizonMonths ? ` (${result.horizonMonths}-month horizon)` : ''}. ` +
+                        `Your selection applies to the next run you start.`,
+                        'info'
+                    );
                 } else {
-                    addLog(`Agents started (${result.jobId}). This takes 20+ minutes; progress appears below.`, 'success');
+                    addLog(
+                        `Agents started (${result.jobId})` +
+                        `${result.horizonMonths ? `, ${result.horizonMonths}-month horizon` : ''}. ` +
+                        `This takes 20+ minutes; progress appears below.`,
+                        'success'
+                    );
                 }
 
                 agents.forEach(agent => { agent.lastRun = new Date(); });
@@ -1444,7 +1481,14 @@
 
                 // Skip the backlog: replaying it would flood the log on every reload.
                 runOutputOffset = job.outputLength || 0;
-                addLog(`Reattached to a run already in progress (${formatElapsed(job.startTime)} elapsed).`, 'info');
+                addLog(
+                    `Reattached to a run already in progress (${formatElapsed(job.startTime)} elapsed` +
+                    `${job.horizonMonths ? `, ${job.horizonMonths}-month horizon` : ''}).`,
+                    'info'
+                );
+                if (job.horizonMonths) {
+                    document.getElementById('runHorizon').value = String(job.horizonMonths);
+                }
                 startPollingRun();
             } catch {
                 // No backend or no run — nothing to resume.
