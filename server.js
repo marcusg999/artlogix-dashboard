@@ -184,8 +184,24 @@ app.get('/api/prospects', async (req, res) => {
 // Supabase — this can take several minutes and consumes Firecrawl/Anthropic
 // credits, so it is de-duplicated per agentId while a run is in flight.
 
+// How far ahead a run looks. Mirrors the agents' own clamp so the dashboard
+// can't ask for a window the agents would silently reject.
+const MIN_HORIZON_MONTHS = 1
+const MAX_HORIZON_MONTHS = 60
+
+function resolveHorizonMonths(raw) {
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.min(MAX_HORIZON_MONTHS, Math.max(MIN_HORIZON_MONTHS, Math.floor(parsed)))
+}
+
 app.post('/api/run-agent', (req, res) => {
   const agentId = req.body?.agentId || 'all'
+
+  // Choosing the window in the dashboard beats editing the agents' .env and
+  // restarting: it is passed to this run's process only, leaving .env alone.
+  // Omitted (or unusable) means the agents fall back to their own default.
+  const horizonMonths = resolveHorizonMonths(req.body?.horizonMonths)
 
   const existing = runningJobs.get(agentId)
   if (existing && existing.status === 'running') {
@@ -193,7 +209,8 @@ app.post('/api/run-agent', (req, res) => {
       status: 'already_running',
       agentId,
       jobId: existing.jobId,
-      startTime: existing.startTime
+      startTime: existing.startTime,
+      horizonMonths: existing.horizonMonths ?? null
     })
   }
 
@@ -202,17 +219,21 @@ app.post('/api/run-agent', (req, res) => {
     jobId,
     agentId,
     status: 'running',
-    startTime: new Date()
+    startTime: new Date(),
+    horizonMonths
   })
 
   // Fire and forget — the client polls GET /api/run-agent/:agentId for status.
-  runAgentAsync(agentId, jobId)
+  runAgentAsync(agentId, jobId, horizonMonths)
 
   res.json({
     status: 'started',
     agentId,
     jobId,
-    message: `Agents are running (cwd: ${AGENTS_DIR}). Results are written to Supabase.`,
+    horizonMonths,
+    message: `Agents are running (cwd: ${AGENTS_DIR}`
+      + `${horizonMonths ? `, looking ${horizonMonths} months ahead` : ''}). `
+      + `Results are written to Supabase.`,
     timestamp: new Date().toISOString()
   })
 })
@@ -239,17 +260,21 @@ app.get('/api/run-agent/:agentId', (req, res) => {
     status: job.status,
     startTime: job.startTime,
     endTime: job.endTime,
+    horizonMonths: job.horizonMonths ?? null,
     error: job.error,
     output: buffer.slice(from - dropped),
     outputLength: dropped + buffer.length
   })
 })
 
-async function runAgentAsync(agentId, jobId) {
+async function runAgentAsync(agentId, jobId, horizonMonths) {
   const job = runningJobs.get(agentId)
 
   try {
-    console.log(`[${jobId}] Running agent ${agentId}`)
+    console.log(
+      `[${jobId}] Running agent ${agentId}` +
+      (horizonMonths ? ` (horizon: ${horizonMonths} months)` : '')
+    )
 
     const command = `npm run agents`
 
@@ -261,7 +286,12 @@ async function runAgentAsync(agentId, jobId) {
     const child = exec(command, {
       cwd: AGENTS_DIR,
       timeout: 60 * 60 * 1000,
-      maxBuffer: 32 * 1024 * 1024
+      maxBuffer: 32 * 1024 * 1024,
+      // Only override HORIZON_MONTHS when one was chosen, so an unset control
+      // leaves whatever the agents' own .env says intact.
+      env: horizonMonths
+        ? { ...process.env, HORIZON_MONTHS: String(horizonMonths) }
+        : process.env
     })
 
     // Prefix every line (not just the first of each chunk) so the run is easy to
