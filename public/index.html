@@ -953,6 +953,14 @@
                     <option value="Qualified">Qualified</option>
                     <option value="New">New</option>
                 </select>
+                <select class="filter-select" id="filterTimeline" onchange="filterProspects()"
+                        title="Filter by how soon the work moves">
+                    <option value="">Any timeline</option>
+                    <option value="3">Next 3 months</option>
+                    <option value="6">Next 6 months</option>
+                    <option value="12">Next 12 months</option>
+                    <option value="24">Next 24 months</option>
+                </select>
                 <select class="filter-select" id="filterType" onchange="filterProspects()">
                     <option value="">All Types</option>
                     <option value="Museum">Museum</option>
@@ -1495,6 +1503,7 @@
             const search = document.getElementById('prospectSearch').value.toLowerCase();
             const status = document.getElementById('filterStatus').value;
             const type   = document.getElementById('filterType').value;
+            const within = Number(document.getElementById('filterTimeline').value) || 0;
 
             filteredProspects = allProspects.filter(p => {
                 const matchSearch = !search ||
@@ -1502,7 +1511,17 @@
                     (p.contact_email || '').toLowerCase().includes(search);
                 const matchStatus = !status || p.status === status;
                 const matchType   = !type   || p.client_type === type;
-                return matchSearch && matchStatus && matchType;
+
+                // Narrows what was already scraped — no re-run needed. Widening
+                // beyond the horizon the agents ran with needs HORIZON_MONTHS
+                // raised and another run, since nothing further out was stored.
+                // A prospect with no timeline is dropped once a window is chosen:
+                // an undated lead can't be promised to fall inside it.
+                const months = p.timeline_months;
+                const matchTimeline = !within ||
+                    (typeof months === 'number' && !Number.isNaN(months) && months >= 0 && months <= within);
+
+                return matchSearch && matchStatus && matchType && matchTimeline;
             });
 
             sortProspects(sortKey, true);
