@@ -803,6 +803,10 @@
             opacity: 0.7;
             font-size: 0.85em;
         }
+        .site-link {
+            opacity: 0.75;
+            font-size: 0.9em;
+        }
         .no-contact {
             opacity: 0.45;
             font-style: italic;
@@ -1197,6 +1201,7 @@
                 person.title || '—',
                 p.contact_email || '—',
                 p.contact_phone || '—',
+                websiteLabel(websiteOf(p)) || '—',
                 p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—',
                 p.timeline_months ? p.timeline_months + ' mo' : '—',
                 ];
@@ -1204,7 +1209,7 @@
 
             doc.autoTable({
                 startY: 72,
-                head: [['Name', 'Type', 'Score', 'Status', 'Contact', 'Role', 'Email', 'Phone', 'Value', 'Timeline']],
+                head: [['Name', 'Type', 'Score', 'Status', 'Contact', 'Role', 'Email', 'Phone', 'Website', 'Value', 'Timeline']],
                 body: rows,
                 theme: 'grid',
                 styles: { fontSize: 8, cellPadding: 5, textColor: [232, 234, 237], fillColor: [26, 31, 46] },
@@ -1374,6 +1379,27 @@
         // The contact name is stored in its own column once the prospects table
         // has been migrated, and in metadata.contactPerson before that — a row
         // saved either way should read the same here.
+        // Where to go and look an institution up by hand. Stored in its own column
+        // once the prospects table has been migrated, and derivable from the
+        // source URL before that — a prospect with no contact details is only a
+        // dead end if there is nowhere to go and find one.
+        function websiteOf(p) {
+            const stored = (p.website || p.metadata?.contactInfo?.officialWebsite || '').trim();
+            if (stored) return stored;
+
+            const source = (p.source_url || '').trim();
+            if (!source) return '';
+            // A Gallery Platform LA listing is kept whole: its origin is the
+            // directory's homepage, which no longer says which gallery this is.
+            if (/^https?:\/\/(www\.)?galleryplatform\.la\//i.test(source)) return source;
+            try { return new URL(source).origin; } catch { return ''; }
+        }
+
+        // Shown without the scheme, which is noise in a table.
+        function websiteLabel(url) {
+            return url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+        }
+
         function contactPersonOf(p) {
             const name = p.contact_name || p.metadata?.contactPerson?.name || '';
             const title = p.contact_title || p.metadata?.contactPerson?.title || '';
@@ -1628,7 +1654,8 @@
                     (p.name || '').toLowerCase().includes(search) ||
                     (p.contact_email || '').toLowerCase().includes(search) ||
                     person.name.toLowerCase().includes(search) ||
-                    person.title.toLowerCase().includes(search);
+                    person.title.toLowerCase().includes(search) ||
+                    websiteOf(p).toLowerCase().includes(search);
                 const matchStatus = !status || p.status === status;
                 const matchType   = !type   || p.client_type === type;
 
@@ -1701,9 +1728,19 @@
                 if (p.contact_phone) {
                     contactLines.push(`<a class="contact-link" href="tel:${p.contact_phone}">${p.contact_phone}</a>`);
                 }
-                // An empty cell is the honest answer, and the score beside it is
-                // already capped below 60 to say the same thing.
-                const contact = contactLines.length ? contactLines.join('') : '<span class="no-contact">no contact</span>';
+                // Every prospect gets a website, so a row with no contact details is
+                // still somewhere to start rather than a dead end. It sits last
+                // because it is the fallback, not the lead.
+                if (!contactLines.length) {
+                    contactLines.push('<span class="no-contact">no contact</span>');
+                }
+                const site = websiteOf(p);
+                if (site) {
+                    contactLines.push(
+                        `<a class="contact-link site-link" href="${site}" target="_blank" rel="noopener noreferrer">${websiteLabel(site)}</a>`
+                    );
+                }
+                const contact = contactLines.join('');
                 return `<tr>
                     <td><div class="prospect-name" title="${p.name || ''}">${p.name || '—'}</div></td>
                     <td>${p.client_type || '—'}</td>
