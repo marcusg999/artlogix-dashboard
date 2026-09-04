@@ -6,6 +6,7 @@
 import express from 'express'
 import cors from 'cors'
 import { exec } from 'child_process'
+import fs from 'fs'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
 import path from 'path'
@@ -43,6 +44,54 @@ const __dirname = path.dirname(__filename)
 // Directory of the ArtLogix agents repo (where `npm run agents` is defined).
 // Defaults to a sibling `artlogixai` checkout; override with AGENTS_DIR.
 const AGENTS_DIR = process.env.AGENTS_DIR || path.resolve(__dirname, '..', 'artlogixai')
+
+// Variables the agents child must inherit as-is: the shell and npm need them to
+// start the process at all, long before the agents' own dotenv could supply them.
+const PROCESS_CRITICAL_ENV = new Set([
+  'PATH', 'HOME', 'SHELL', 'PWD', 'TMPDIR', 'USER', 'LOGNAME', 'LANG', 'NODE'
+])
+
+/**
+ * Builds the environment for an agents run.
+ *
+ * A child process inherits this server's environment, and dotenv deliberately
+ * refuses to overwrite a variable that is already set. Together those meant the
+ * dashboard's .env — loaded at startup, and easily months out of date — silently
+ * won every key it shared with the agents' own .env: the agents read their file
+ * and then discarded what they had read. A stale ANTHROPIC_API_KEY here failed
+ * every extraction call with 401 while the working key sat unread in
+ * artlogixai/.env, so runs scraped normally and produced nothing.
+ *
+ * Forcing the agents' dotenv to override everything would fix the credentials
+ * and break the run controls, clobbering the window and region chosen in the UI.
+ * So instead this drops exactly the keys the agents' .env defines, leaving their
+ * dotenv to fill those in itself. The dashboard still supplies anything their
+ * file leaves out, and the caller re-applies per-run choices on top.
+ *
+ * Returns the deferred key *names* for the run log — never their values.
+ */
+function agentEnvironment() {
+  const env = { ...process.env }
+  const deferred = []
+
+  let owned
+  try {
+    owned = dotenv.parse(fs.readFileSync(path.join(AGENTS_DIR, '.env')))
+  } catch {
+    // No readable .env beside the agents: there is nothing to defer to, so pass
+    // ours through unchanged rather than starving the run of credentials.
+    return { env, deferred }
+  }
+
+  for (const key of Object.keys(owned)) {
+    if (PROCESS_CRITICAL_ENV.has(key)) continue
+    if (!(key in env)) continue
+    delete env[key]
+    deferred.push(key)
+  }
+
+  return { env, deferred: deferred.sort() }
+}
 
 // Middleware
 app.use(cors())
@@ -294,6 +343,25 @@ async function runAgentAsync(agentId, jobId, horizonMonths, region) {
 
     const command = `npm run agents`
 
+    // Keep the buffer bounded, tracking how much was dropped so ?since= offsets
+    // stay correct across truncation. Initialised before the child starts so the
+    // run's own configuration can be recorded ahead of its first line of output.
+    const MAX_BUFFERED = 1024 * 1024
+    job.output = ''
+    job.outputOffset = 0
+
+    const note = line => {
+      job.output += `${line}\n`
+      console.log(`[${jobId}] ${line}`)
+    }
+
+    const { env: agentEnv, deferred } = agentEnvironment()
+    if (deferred.length > 0) {
+      // Names only. Which file a credential came from is exactly what was
+      // impossible to see when a stale key here shadowed a working one there.
+      note(`🔑 Reading ${deferred.join(', ')} from the agents' own .env`)
+    }
+
     // execAsync buffers output instead of showing it, so a run triggered from the
     // dashboard was completely opaque: agent progress, warnings and errors all went
     // into job.output and were never displayed. Stream both pipes to this server's
@@ -303,15 +371,14 @@ async function runAgentAsync(agentId, jobId, horizonMonths, region) {
       cwd: AGENTS_DIR,
       timeout: 60 * 60 * 1000,
       maxBuffer: 32 * 1024 * 1024,
-      // Only override HORIZON_MONTHS when one was chosen, so an unset control
-      // leaves whatever the agents' own .env says intact.
-      env: (horizonMonths || region)
-        ? {
-            ...process.env,
-            ...(horizonMonths ? { HORIZON_MONTHS: String(horizonMonths) } : {}),
-            ...(region ? { REGION: region } : {})
-          }
-        : process.env
+      env: {
+        ...agentEnv,
+        // Applied last, and left set, so a window or region chosen for this run
+        // survives the agents' dotenv — which will not overwrite what is already
+        // here. An unset control stays absent, leaving their .env to decide.
+        ...(horizonMonths ? { HORIZON_MONTHS: String(horizonMonths) } : {}),
+        ...(region ? { REGION: region } : {})
+      }
     })
 
     // Prefix every line (not just the first of each chunk) so the run is easy to
@@ -324,12 +391,6 @@ async function runAgentAsync(agentId, jobId, horizonMonths, region) {
 
     // Append to job.output as it arrives (rather than only at exit) so the
     // dashboard can show the run live instead of waiting for it to finish.
-    // Keep the buffer bounded, tracking how much was dropped so ?since= offsets
-    // stay correct across truncation.
-    const MAX_BUFFERED = 1024 * 1024
-    job.output = ''
-    job.outputOffset = 0
-
     const capture = (stream, chunk) => {
       job.output += chunk
       if (job.output.length > MAX_BUFFERED) {

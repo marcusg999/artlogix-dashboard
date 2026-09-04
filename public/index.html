@@ -1344,7 +1344,10 @@
         // rather than just skipping them.
         // Matched without the variation selector some of them carry, so the
         // prefix test doesn't depend on it.
-        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|♻|🔥|🗓|🌎|📊 Total|✨)/u;
+        // 🔑 names which credentials the run is taking from the agents' own
+        // .env rather than inheriting from the dashboard — the distinction that
+        // was invisible while a stale key here shadowed a working one there.
+        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|♻|🔥|🗓|🌎|🔑|📊 Total|✨)/u;
 
         function relayAgentOutput(chunk) {
             if (!chunk) return;
@@ -1352,7 +1355,7 @@
                 const text = line.trim();
                 if (!text || !NOTABLE_LINE.test(text)) continue;
                 const type = /^(❌|⛔)/u.test(text) ? 'error'
-                    : /^(⏳|🔥|🗓|🌎)/u.test(text) ? 'info'
+                    : /^(⏳|🔥|🗓|🌎|🔑)/u.test(text) ? 'info'
                     : 'success';
                 addLog(text, type);
             }
