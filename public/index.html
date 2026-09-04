@@ -793,6 +793,20 @@
         .status-qualified { background: rgba(245,158,11,0.12); color: #f59e0b; }
         .status-new       { background: rgba(99,102,241,0.12); color: #818cf8; }
 
+        .contact-person {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 2px;
+        }
+        .contact-title {
+            font-weight: 400;
+            opacity: 0.7;
+            font-size: 0.85em;
+        }
+        .no-contact {
+            opacity: 0.45;
+            font-style: italic;
+        }
         .contact-link {
             color: var(--accent-secondary);
             text-decoration: none;
@@ -1172,20 +1186,25 @@
             doc.setTextColor(155, 163, 175);
             doc.text(`Generated ${now}  ·  ${filteredProspects.length} prospects`, 40, 58);
 
-            const rows = filteredProspects.map(p => [
+            const rows = filteredProspects.map(p => {
+                const person = contactPersonOf(p);
+                return [
                 p.name || '—',
                 p.client_type || '—',
                 p.lead_score ?? '—',
                 p.status || '—',
+                person.name || '—',
+                person.title || '—',
                 p.contact_email || '—',
                 p.contact_phone || '—',
                 p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—',
                 p.timeline_months ? p.timeline_months + ' mo' : '—',
-            ]);
+                ];
+            });
 
             doc.autoTable({
                 startY: 72,
-                head: [['Name', 'Type', 'Score', 'Status', 'Email', 'Phone', 'Value', 'Timeline']],
+                head: [['Name', 'Type', 'Score', 'Status', 'Contact', 'Role', 'Email', 'Phone', 'Value', 'Timeline']],
                 body: rows,
                 theme: 'grid',
                 styles: { fontSize: 8, cellPadding: 5, textColor: [232, 234, 237], fillColor: [26, 31, 46] },
@@ -1348,6 +1367,15 @@
         // .env rather than inheriting from the dashboard — the distinction that
         // was invisible while a stale key here shadowed a working one there.
         const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|♻|🔥|🗓|🌎|🔑|📊 Total|✨)/u;
+
+        // The contact name is stored in its own column once the prospects table
+        // has been migrated, and in metadata.contactPerson before that — a row
+        // saved either way should read the same here.
+        function contactPersonOf(p) {
+            const name = p.contact_name || p.metadata?.contactPerson?.name || '';
+            const title = p.contact_title || p.metadata?.contactPerson?.title || '';
+            return { name: String(name).trim(), title: String(title).trim() };
+        }
 
         function relayAgentOutput(chunk) {
             if (!chunk) return;
@@ -1592,9 +1620,12 @@
             const region = document.getElementById('filterRegion').value;
 
             filteredProspects = allProspects.filter(p => {
+                const person = contactPersonOf(p);
                 const matchSearch = !search ||
                     (p.name || '').toLowerCase().includes(search) ||
-                    (p.contact_email || '').toLowerCase().includes(search);
+                    (p.contact_email || '').toLowerCase().includes(search) ||
+                    person.name.toLowerCase().includes(search) ||
+                    person.title.toLowerCase().includes(search);
                 const matchStatus = !status || p.status === status;
                 const matchType   = !type   || p.client_type === type;
 
@@ -1652,9 +1683,24 @@
                 const statusClass = p.status === 'Hot Lead' ? 'status-hot' : p.status === 'Qualified' ? 'status-qualified' : 'status-new';
                 const value = p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—';
                 const timeline = p.timeline_months ? p.timeline_months + 'mo' : '—';
-                const contact = p.contact_email
-                    ? `<a class="contact-link" href="mailto:${p.contact_email}">${p.contact_email}</a>`
-                    : '—';
+                const person = contactPersonOf(p);
+                const contactLines = [];
+                if (person.name) {
+                    contactLines.push(
+                        `<div class="contact-person">${person.name}` +
+                        (person.title ? ` <span class="contact-title">· ${person.title}</span>` : '') +
+                        `</div>`
+                    );
+                }
+                if (p.contact_email) {
+                    contactLines.push(`<a class="contact-link" href="mailto:${p.contact_email}">${p.contact_email}</a>`);
+                }
+                if (p.contact_phone) {
+                    contactLines.push(`<a class="contact-link" href="tel:${p.contact_phone}">${p.contact_phone}</a>`);
+                }
+                // An empty cell is the honest answer, and the score beside it is
+                // already capped below 60 to say the same thing.
+                const contact = contactLines.length ? contactLines.join('') : '<span class="no-contact">no contact</span>';
                 return `<tr>
                     <td><div class="prospect-name" title="${p.name || ''}">${p.name || '—'}</div></td>
                     <td>${p.client_type || '—'}</td>
