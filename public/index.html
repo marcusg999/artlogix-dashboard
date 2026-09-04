@@ -1347,7 +1347,10 @@
         // 🔑 names which credentials the run is taking from the agents' own
         // .env rather than inheriting from the dashboard — the distinction that
         // was invisible while a stale key here shadowed a working one there.
-        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|♻|🔥|🗓|🌎|🔑|📊 Total|✨)/u;
+        // 🗂 reports how many galleries the LA directory lists this run, and what
+        // it added or dropped since the build — the agents read the membership
+        // live, so the source count is only knowable once the run has started.
+        const NOTABLE_LINE = /^(🚀|✅ [A-Z]|❌|⛔|⏳|💾|♻|🔥|🗓|🌎|🔑|🗂|📊 Total|✨)/u;
 
         function relayAgentOutput(chunk) {
             if (!chunk) return;
@@ -1355,7 +1358,7 @@
                 const text = line.trim();
                 if (!text || !NOTABLE_LINE.test(text)) continue;
                 const type = /^(❌|⛔)/u.test(text) ? 'error'
-                    : /^(⏳|🔥|🗓|🌎|🔑)/u.test(text) ? 'info'
+                    : /^(⏳|🔥|🗓|🌎|🔑|🗂)/u.test(text) ? 'info'
                     : 'success';
                 addLog(text, type);
             }
