@@ -166,6 +166,15 @@ app.get('/api/stats', async (_, res) => {
       .limit(1)
       .single()
 
+    // How many could actually be contacted. The agents cap an unreachable
+    // prospect below 60, so this is the number that decides whether a run was
+    // worth its Firecrawl spend — the headline count on its own hides a table
+    // full of dead ends.
+    const { count: reachable } = await supabase
+      .from('prospects')
+      .select('*', { count: 'exact', head: true })
+      .or('contact_email.not.is.null,contact_phone.not.is.null,contact_name.not.is.null')
+
     const { data: byType } = await supabase
       .from('prospects')
       .select('client_type')
@@ -178,6 +187,7 @@ app.get('/api/stats', async (_, res) => {
 
     res.json({
       totalProspects: totalProspects || 0,
+      reachable: reachable || 0,
       hotLeads: hotLeads || 0,
       qualifiedLeads: qualifiedLeads || 0,
       lastRun: latestProspect?.created_at || null,
@@ -307,6 +317,27 @@ app.post('/api/run-agent', (req, res) => {
 // seconds to show live progress, so the whole buffer must not be re-sent each
 // time. Callers pass ?since=<offset> and get only what was appended after it,
 // plus the new absolute offset to send next time.
+// Whether anything is running, without asking for a job by name.
+//
+// The page calls this on every load to reattach to a run in progress. It used
+// to ask `/api/run-agent/all`, which 404s when no job exists — the normal state
+// — so every page load logged a console error the code then deliberately
+// ignored. An error that is always there is one nobody reads when it matters.
+app.get('/api/run-agent', (_, res) => {
+  const running = [...runningJobs.values()].find(job => job.status === 'running')
+  if (!running) return res.json({ status: 'idle' })
+
+  res.json({
+    jobId: running.jobId,
+    agentId: running.agentId,
+    status: running.status,
+    startTime: running.startTime,
+    horizonMonths: running.horizonMonths ?? null,
+    region: running.region ?? null,
+    outputLength: (running.outputOffset || 0) + (running.output || '').length
+  })
+})
+
 app.get('/api/run-agent/:agentId', (req, res) => {
   const job = runningJobs.get(req.params.agentId)
   if (!job) return res.status(404).json({ status: 'not_found' })
