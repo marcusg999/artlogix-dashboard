@@ -914,17 +914,17 @@
             <div class="stat-card">
                 <div class="stat-label">Total Prospects</div>
                 <div class="stat-value" id="totalProspects">0</div>
-                <div class="stat-change">↗ Loading...</div>
+                <div class="stat-change" id="totalProspectsNote">Loading…</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Hot Leads (90+)</div>
                 <div class="stat-value" id="hotLeads">0</div>
-                <div class="stat-change">↗ Loading...</div>
+                <div class="stat-change" id="hotLeadsNote">Loading…</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Qualified (80-89)</div>
                 <div class="stat-value" id="qualifiedLeads">0</div>
-                <div class="stat-change">↗ Loading...</div>
+                <div class="stat-change" id="qualifiedLeadsNote">Loading…</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Last Run</div>
@@ -1651,7 +1651,11 @@
         // refresh (or reopening the tab) doesn't look like nothing is happening.
         async function resumeRunInProgress() {
             try {
-                const res = await fetch(`${config.apiEndpoint}/run-agent/${RUN_AGENT_ID}`);
+                // Asks whether anything is running rather than for a job by
+                // name: the by-name route 404s when none exists, which is the
+                // normal state, and a console error on every page load is one
+                // nobody reads when it matters.
+                const res = await fetch(`${config.apiEndpoint}/run-agent`);
                 if (!res.ok) return;
                 const job = await res.json();
                 if (job.status !== 'running') return;
@@ -1681,7 +1685,28 @@
                 document.getElementById('hotLeads').textContent = data.hotLeads ?? 0;
                 document.getElementById('qualifiedLeads').textContent = data.qualifiedLeads ?? 0;
                 document.getElementById('lastRun').textContent = data.lastRun ? formatTime(new Date(data.lastRun)) : 'Never';
-                document.getElementById('lastRunStatus').innerHTML = data.totalProspects ? `↗ ${data.totalProspects} total prospects` : 'No data yet';
+                document.getElementById('lastRunStatus').textContent = data.totalProspects ? `↗ ${data.totalProspects} total prospects` : 'No data yet';
+
+                // These three said "Loading…" permanently: the markup carried no id
+                // and nothing ever wrote to them, so the first render was the last.
+                const total = data.totalProspects ?? 0;
+                const share = n => (total ? ` · ${Math.round((n / total) * 100)}%` : '');
+
+                // Reachable is the number that decides whether a run paid for
+                // itself. An unreachable prospect is capped below 60 by the agents,
+                // so a large gap here means a table full of dead ends.
+                const reachable = data.reachable;
+                document.getElementById('totalProspectsNote').textContent =
+                    total === 0
+                        ? 'No prospects yet'
+                        : reachable === undefined
+                            ? `${total} stored`
+                            : `${reachable} of ${total} reachable`;
+
+                document.getElementById('hotLeadsNote').textContent =
+                    total === 0 ? '—' : `score 90+${share(data.hotLeads ?? 0)}`;
+                document.getElementById('qualifiedLeadsNote').textContent =
+                    total === 0 ? '—' : `score 80–89${share(data.qualifiedLeads ?? 0)}`;
             } catch (e) {
                 console.error('Stats load failed', e);
             }
