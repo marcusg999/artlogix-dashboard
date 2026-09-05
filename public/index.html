@@ -803,6 +803,18 @@
             opacity: 0.7;
             font-size: 0.85em;
         }
+        .prospect-description {
+            font-size: 0.82em;
+            opacity: 0.6;
+            margin-top: 3px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .event-cell {
+            white-space: nowrap;
+        }
         .site-link {
             opacity: 0.75;
             font-size: 0.9em;
@@ -1031,13 +1043,14 @@
                             <th onclick="sortProspects('client_type')">Type ↕</th>
                             <th onclick="sortProspects('lead_score')">Score ↕</th>
                             <th onclick="sortProspects('status')">Status ↕</th>
+                            <th onclick="sortProspects('event_date')">Event date ↕</th>
                             <th>Contact</th>
                             <th onclick="sortProspects('estimated_value')">Value ↕</th>
                             <th onclick="sortProspects('timeline_months')">Timeline ↕</th>
                         </tr>
                     </thead>
                     <tbody id="prospectsTableBody">
-                        <tr><td colspan="7" class="empty-state">Loading prospects...</td></tr>
+                        <tr><td colspan="8" class="empty-state">Loading prospects...</td></tr>
                     </tbody>
                 </table>
                 <div class="table-footer">
@@ -1190,39 +1203,79 @@
             doc.setTextColor(155, 163, 175);
             doc.text(`Generated ${now}  ·  ${filteredProspects.length} prospects`, 40, 58);
 
-            const rows = filteredProspects.map(p => {
+            // Every prospect is two rows. A landscape page cannot hold a
+            // description and two URLs alongside the scannable fields at a
+            // readable size, and this report is worked from rather than skimmed —
+            // so the fields you sort by stay in a table, and the ones you read
+            // (website, source listing, what is actually moving) get a full-width
+            // line beneath. Anything absent is left out of that line entirely
+            // rather than padded with placeholders.
+            const rows = [];
+            for (const p of filteredProspects) {
                 const person = contactPersonOf(p);
-                return [
-                p.name || '—',
-                p.client_type || '—',
-                p.lead_score ?? '—',
-                p.status || '—',
-                person.name || '—',
-                person.title || '—',
-                p.contact_email || '—',
-                p.contact_phone || '—',
-                websiteLabel(websiteOf(p)) || '—',
-                p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—',
-                p.timeline_months ? p.timeline_months + ' mo' : '—',
-                ];
-            });
+                const contact = [person.name, person.title].filter(Boolean).join(' · ');
+
+                rows.push([
+                    p.name || '—',
+                    p.client_type || '—',
+                    p.lead_score ?? '—',
+                    p.status || '—',
+                    eventDateOf(p) || '—',
+                    contact || '—',
+                    p.contact_email || '—',
+                    p.contact_phone || '—',
+                ]);
+
+                const site = websiteOf(p);
+                const source = sourceOf(p);
+                const facts = [];
+                if (site) facts.push(`Website: ${websiteLabel(site)}`);
+                // Only worth printing when it is somewhere other than the website.
+                if (source && source !== site) facts.push(`Source: ${websiteLabel(source)}`);
+                if (p.estimated_value) facts.push(`Est. ${'$' + Number(p.estimated_value).toLocaleString()}`);
+                if (p.timeline_months) facts.push(`${p.timeline_months} mo out`);
+
+                const detail = [facts.join('   ·   '), descriptionOf(p)]
+                    .filter(Boolean)
+                    .join('\n');
+
+                rows.push([{
+                    content: detail || '—',
+                    colSpan: 8,
+                    styles: { textColor: [155, 163, 175], fontSize: 7.5, cellPadding: { top: 2, bottom: 6, left: 5, right: 5 } }
+                }]);
+            }
 
             doc.autoTable({
                 startY: 72,
-                head: [['Name', 'Type', 'Score', 'Status', 'Contact', 'Role', 'Email', 'Phone', 'Website', 'Value', 'Timeline']],
+                head: [['Name', 'Type', 'Score', 'Status', 'Event date', 'Contact', 'Email', 'Phone']],
                 body: rows,
                 theme: 'grid',
-                styles: { fontSize: 8, cellPadding: 5, textColor: [232, 234, 237], fillColor: [26, 31, 46] },
+                styles: { fontSize: 8, cellPadding: 5, textColor: [232, 234, 237], fillColor: [26, 31, 46], overflow: 'linebreak' },
                 headStyles: { fillColor: [19, 24, 33], textColor: [0, 255, 136], fontStyle: 'bold' },
-                alternateRowStyles: { fillColor: [22, 27, 40] },
+                // The pair of rows belonging to one prospect must read as one
+                // record, so banding by row would split them; the separator below
+                // does that job instead.
                 columnStyles: {
-                    0: { cellWidth: 160 },
-                    2: { halign: 'center', cellWidth: 45 },
-                    6: { halign: 'right', cellWidth: 70 },
-                    7: { halign: 'center', cellWidth: 55 },
+                    0: { cellWidth: 145 },
+                    1: { cellWidth: 55 },
+                    2: { halign: 'center', cellWidth: 38 },
+                    3: { cellWidth: 58 },
+                    4: { cellWidth: 68 },
+                    5: { cellWidth: 105 },
+                    7: { cellWidth: 72 },
                 },
                 didParseCell(data) {
-                    if (data.section === 'body' && data.column.index === 2) {
+                    if (data.section !== 'body') return;
+
+                    // A detail row is the one spanning the whole table.
+                    const isDetail = data.row.raw.length === 1 && data.row.raw[0]?.colSpan === 8;
+                    if (isDetail) {
+                        data.cell.styles.lineWidth = { top: 0, right: 0.5, bottom: 0.5, left: 0.5 };
+                        return;
+                    }
+
+                    if (data.column.index === 2) {
                         const score = Number(data.cell.raw);
                         data.cell.styles.textColor = score >= 90 ? [0, 255, 136] : score >= 80 ? [245, 158, 11] : [129, 140, 248];
                         data.cell.styles.fontStyle = 'bold';
@@ -1398,6 +1451,42 @@
         // Shown without the scheme, which is noise in a table.
         function websiteLabel(url) {
             return url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+        }
+
+        // Prospect text is scraped from the open web: a description carrying a
+        // quote or an angle bracket would otherwise break out of the attribute or
+        // the cell it is written into.
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        function escapeAttr(value) {
+            return escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // The listing the prospect was scraped from. Kept distinct from the website:
+        // for a directory-listed gallery the two differ, and the listing is what
+        // shows the exhibition that made this a prospect.
+        function sourceOf(p) {
+            return String(p.source_url || '').trim();
+        }
+
+        // A date to plan a crate around. Left as stored if it will not parse —
+        // a half-known date beats silently dropping it.
+        function eventDateOf(p) {
+            const raw = String(p.event_date || '').trim();
+            if (!raw) return '';
+            const parsed = new Date(raw);
+            return isNaN(parsed.getTime())
+                ? raw
+                : parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        function descriptionOf(p) {
+            return String(p.description || '').replace(/\s+/g, ' ').trim();
         }
 
         function contactPersonOf(p) {
@@ -1608,7 +1697,7 @@
 
         async function loadProspects() {
             const tbody = document.getElementById('prospectsTableBody');
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Loading...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Loading...</td></tr>';
             try {
                 // limit was 500; a full multi-source run can exceed that and the PDF
                 // would silently export only the first 500 rows.
@@ -1627,7 +1716,7 @@
                 filterProspects();
                 addLog(`Loaded ${allProspects.length} prospects.`);
             } catch (e) {
-                tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Failed to load prospects: ${e.message}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="empty-state">Failed to load prospects: ${e.message}</td></tr>`;
                 addLog(`Failed to load prospects: ${e.message}`, 'error');
             }
         }
@@ -1655,7 +1744,9 @@
                     (p.contact_email || '').toLowerCase().includes(search) ||
                     person.name.toLowerCase().includes(search) ||
                     person.title.toLowerCase().includes(search) ||
-                    websiteOf(p).toLowerCase().includes(search);
+                    websiteOf(p).toLowerCase().includes(search) ||
+                    sourceOf(p).toLowerCase().includes(search) ||
+                    descriptionOf(p).toLowerCase().includes(search);
                 const matchStatus = !status || p.status === status;
                 const matchType   = !type   || p.client_type === type;
 
@@ -1701,7 +1792,7 @@
             const page  = filteredProspects.slice(start, start + PAGE_SIZE);
 
             if (!page.length) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No prospects match your filters.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No prospects match your filters.</td></tr>';
                 document.getElementById('prospectsCount').textContent = '0 prospects';
                 document.getElementById('pagination').innerHTML = '';
                 return;
@@ -1740,12 +1831,32 @@
                         `<a class="contact-link site-link" href="${site}" target="_blank" rel="noopener noreferrer">${websiteLabel(site)}</a>`
                     );
                 }
+                // The page this was scraped from, when that is somewhere other than
+                // the website — for a directory-listed gallery it is the listing
+                // showing the exhibition that made this a prospect.
+                const source = sourceOf(p);
+                if (source && source !== site) {
+                    contactLines.push(
+                        `<a class="contact-link site-link" href="${source}" target="_blank" rel="noopener noreferrer">listing: ${websiteLabel(source)}</a>`
+                    );
+                }
                 const contact = contactLines.join('');
+                // What is actually moving. Clamped to two lines so the table stays
+                // scannable, with the whole thing on hover and in the PDF.
+                const description = descriptionOf(p);
+                const descriptionHtml = description
+                    ? `<div class="prospect-description" title="${escapeAttr(description)}">${escapeHtml(description)}</div>`
+                    : '';
+
                 return `<tr>
-                    <td><div class="prospect-name" title="${p.name || ''}">${p.name || '—'}</div></td>
+                    <td>
+                        <div class="prospect-name" title="${escapeAttr(p.name || '')}">${escapeHtml(p.name || '—')}</div>
+                        ${descriptionHtml}
+                    </td>
                     <td>${p.client_type || '—'}</td>
                     <td><span class="score-badge ${scoreClass}">${score}</span></td>
                     <td><span class="status-pill ${statusClass}">${p.status || '—'}</span></td>
+                    <td class="event-cell">${eventDateOf(p) || '—'}</td>
                     <td>${contact}</td>
                     <td class="value-cell">${value}</td>
                     <td>${timeline}</td>
