@@ -793,10 +793,18 @@
         .status-qualified { background: rgba(245,158,11,0.12); color: #f59e0b; }
         .status-new       { background: rgba(99,102,241,0.12); color: #818cf8; }
 
+        /* One fact per line. The cell mixes divs, spans and inline anchors, so
+           the line break lives on the wrapper rather than on each element —
+           without it the parts ran together as "no contactanatebgi.comlisting:". */
+        .contact-line {
+            display: block;
+        }
+        .contact-line + .contact-line {
+            margin-top: 2px;
+        }
         .contact-person {
             font-weight: 600;
             display: block;
-            margin-bottom: 2px;
         }
         .contact-title {
             font-weight: 400;
@@ -1214,6 +1222,10 @@
             for (const p of filteredProspects) {
                 const person = contactPersonOf(p);
                 const contact = [person.name, person.title].filter(Boolean).join(' · ');
+                // The column is narrow, so it carries the address to write to and
+                // the others go on the detail line below — where there is room to
+                // read them, rather than being cut off mid-domain.
+                const emails = emailsOf(p);
 
                 rows.push([
                     p.name || '—',
@@ -1222,7 +1234,7 @@
                     p.status || '—',
                     eventDateOf(p) || '—',
                     contact || '—',
-                    p.contact_email || '—',
+                    emails[0] || '—',
                     p.contact_phone || '—',
                 ]);
 
@@ -1232,6 +1244,7 @@
                 if (site) facts.push(`Website: ${websiteLabel(site)}`);
                 // Only worth printing when it is somewhere other than the website.
                 if (source && source !== site) facts.push(`Source: ${websiteLabel(source)}`);
+                if (emails.length > 1) facts.push(`Also: ${emails.slice(1).join(', ')}`);
                 if (p.estimated_value) facts.push(`Est. ${'$' + Number(p.estimated_value).toLocaleString()}`);
                 if (p.timeline_months) facts.push(`${p.timeline_months} mo out`);
 
@@ -1487,6 +1500,18 @@
 
         function descriptionOf(p) {
             return String(p.description || '').replace(/\s+/g, ' ').trim();
+        }
+
+        // Every address the agents found for this prospect, best first. A gallery
+        // routinely publishes more than one — a general inbox and a registrar —
+        // and the column can only hold one, so the rest travel in metadata.
+        // The column's value leads regardless, so a row saved before the agents
+        // started collecting the set still shows its address.
+        function emailsOf(p) {
+            const all = [p.contact_email, ...(p.metadata?.contactEmails || [])]
+                .map(e => String(e || '').trim())
+                .filter(Boolean);
+            return [...new Set(all.map(e => e.toLowerCase()))];
         }
 
         function contactPersonOf(p) {
@@ -1833,16 +1858,20 @@
                 const contactLines = [];
                 if (person.name) {
                     contactLines.push(
-                        `<div class="contact-person">${person.name}` +
-                        (person.title ? ` <span class="contact-title">· ${person.title}</span>` : '') +
+                        `<div class="contact-person">${escapeHtml(person.name)}` +
+                        (person.title ? ` <span class="contact-title">· ${escapeHtml(person.title)}</span>` : '') +
                         `</div>`
                     );
                 }
-                if (p.contact_email) {
-                    contactLines.push(`<a class="contact-link" href="mailto:${p.contact_email}">${p.contact_email}</a>`);
+                for (const email of emailsOf(p)) {
+                    contactLines.push(
+                        `<a class="contact-link" href="mailto:${escapeAttr(email)}">${escapeHtml(email)}</a>`
+                    );
                 }
                 if (p.contact_phone) {
-                    contactLines.push(`<a class="contact-link" href="tel:${p.contact_phone}">${p.contact_phone}</a>`);
+                    contactLines.push(
+                        `<a class="contact-link" href="tel:${escapeAttr(p.contact_phone)}">${escapeHtml(p.contact_phone)}</a>`
+                    );
                 }
                 // Every prospect gets a website, so a row with no contact details is
                 // still somewhere to start rather than a dead end. It sits last
@@ -1853,7 +1882,7 @@
                 const site = websiteOf(p);
                 if (site) {
                     contactLines.push(
-                        `<a class="contact-link site-link" href="${site}" target="_blank" rel="noopener noreferrer">${websiteLabel(site)}</a>`
+                        `<a class="contact-link site-link" href="${escapeAttr(site)}" target="_blank" rel="noopener noreferrer">${escapeHtml(websiteLabel(site))}</a>`
                     );
                 }
                 // The page this was scraped from, when that is somewhere other than
@@ -1862,10 +1891,10 @@
                 const source = sourceOf(p);
                 if (source && source !== site) {
                     contactLines.push(
-                        `<a class="contact-link site-link" href="${source}" target="_blank" rel="noopener noreferrer">listing: ${websiteLabel(source)}</a>`
+                        `<a class="contact-link site-link" href="${escapeAttr(source)}" target="_blank" rel="noopener noreferrer">listing: ${escapeHtml(websiteLabel(source))}</a>`
                     );
                 }
-                const contact = contactLines.join('');
+                const contact = contactLines.map(line => `<div class="contact-line">${line}</div>`).join('');
                 // What is actually moving. Clamped to two lines so the table stays
                 // scannable, with the whole thing on hover and in the PDF.
                 const description = descriptionOf(p);
