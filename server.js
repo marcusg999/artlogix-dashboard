@@ -5,7 +5,7 @@
 
 import express from 'express'
 import cors from 'cors'
-import { exec } from 'child_process'
+import { spawn } from 'child_process'
 import fs from 'fs'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
@@ -44,6 +44,20 @@ const __dirname = path.dirname(__filename)
 // Directory of the ArtLogix agents repo (where `npm run agents` is defined).
 // Defaults to a sibling `artlogixai` checkout; override with AGENTS_DIR.
 const AGENTS_DIR = process.env.AGENTS_DIR || path.resolve(__dirname, '..', 'artlogixai')
+
+// How long a run may take before it is killed.
+//
+// This was an hour, which is less than a full run can possibly take. Firecrawl
+// is paced at FIRECRAWL_RPM (8 by default, so 7.5s between every request) and
+// every request is serialised: ~605 requests for 38 museums, 110 galleries and
+// the smaller sources, plus their contact pages, is 1h16m of scraping before a
+// single Claude call. Runs were being SIGTERMed partway through and reported as
+// "exited with code null", which names neither the signal nor the cause.
+//
+// Six hours is a ceiling for a stuck run, not a target — a healthy full run
+// finishes well inside it. Lower RUN_TIMEOUT_MINUTES for a narrower region, or
+// raise it if the pace is slowed further.
+const RUN_TIMEOUT_MS = Math.max(1, Number(process.env.RUN_TIMEOUT_MINUTES) || 360) * 60_000
 
 // Variables the agents child must inherit as-is: the shell and npm need them to
 // start the process at all, long before the agents' own dotenv could supply them.
@@ -362,6 +376,17 @@ app.get('/api/run-agent/:agentId', (req, res) => {
   })
 })
 
+// A detached child would otherwise survive this server and keep scraping with
+// nothing watching it or saving its status.
+const liveRuns = new Set()
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    for (const stop of liveRuns) stop('SIGTERM')
+    process.exit(0)
+  })
+}
+
 async function runAgentAsync(agentId, jobId, horizonMonths, region) {
   const job = runningJobs.get(agentId)
 
@@ -393,15 +418,22 @@ async function runAgentAsync(agentId, jobId, horizonMonths, region) {
       note(`🔑 Reading ${deferred.join(', ')} from the agents' own .env`)
     }
 
-    // execAsync buffers output instead of showing it, so a run triggered from the
-    // dashboard was completely opaque: agent progress, warnings and errors all went
-    // into job.output and were never displayed. Stream both pipes to this server's
-    // console (prefixed with the job id) while still capturing them for the status
-    // endpoint, so the terminal running `npm start` shows the run as it happens.
-    const child = exec(command, {
+    // spawn rather than exec: exec buffers the child's entire output to hand to a
+    // callback, and kills the child when that buffer fills — a real ceiling on a
+    // run that logs per source for hours, and one this code does not need, since
+    // both pipes are streamed below and the copy kept for the status endpoint is
+    // separately bounded. Streaming also means output reaches the terminal as the
+    // run happens instead of at the end.
+    const child = spawn(command, {
       cwd: AGENTS_DIR,
-      timeout: 60 * 60 * 1000,
-      maxBuffer: 32 * 1024 * 1024,
+      shell: true,
+      // The command runs through a shell, so the agents are a *grandchild*:
+      // shell -> npm -> node. Signalling the shell alone leaves that node
+      // process running, holding the pipes open and spending Firecrawl credits
+      // long after this server has given up on it — which is what the old
+      // one-hour timeout did every time it fired. Detaching makes the child a
+      // process-group leader so the whole tree can be signalled together.
+      detached: true,
       env: {
         ...agentEnv,
         // Applied last, and left set, so a window or region chosen for this run
@@ -435,12 +467,63 @@ async function runAgentAsync(agentId, jobId, horizonMonths, region) {
     child.stdout?.on('data', chunk => capture(process.stdout, chunk))
     child.stderr?.on('data', chunk => capture(process.stderr, chunk))
 
-    await new Promise((resolve, reject) => {
-      child.on('error', reject)
-      child.on('close', code => {
-        code === 0 ? resolve() : reject(new Error(`\`${command}\` exited with code ${code}`))
+    // Enforced here rather than by spawn so the reason survives: a killed child
+    // reports a null exit code and nothing else, which is how an hour-long
+    // timeout came to look like an unexplained crash.
+    // Signals the whole process group, so npm and the node process under it go
+    // too. Negating the pid addresses the group; ESRCH just means it is already
+    // gone, which is the normal race when a run finishes as the timer fires.
+    const stopRun = signal => {
+      try {
+        process.kill(-child.pid, signal)
+      } catch (err) {
+        if (err.code !== 'ESRCH') console.error(`[${jobId}] Could not send ${signal}:`, err.message)
+      }
+    }
+
+    liveRuns.add(stopRun)
+
+    let timedOut = false
+    const killAt = setTimeout(() => {
+      timedOut = true
+      note(`⛔ Run exceeded ${RUN_TIMEOUT_MS / 60_000} minutes — stopping it.`)
+      stopRun('SIGTERM')
+      // A run mid-scrape may not stop on a polite signal.
+      setTimeout(() => stopRun('SIGKILL'), 10_000).unref()
+    }, RUN_TIMEOUT_MS)
+
+    try {
+      await new Promise((resolve, reject) => {
+        child.on('error', reject)
+        child.on('close', (code, signal) => {
+          if (code === 0) return resolve()
+
+          // Prospects are saved per source, so whatever was scraped before this
+          // point is already in the table — say so, rather than implying the run
+          // produced nothing.
+          if (timedOut) {
+            return reject(new Error(
+              `\`${command}\` ran past the ${RUN_TIMEOUT_MS / 60_000}-minute limit and was stopped. ` +
+              `Prospects found before then are saved. Raise RUN_TIMEOUT_MINUTES, ` +
+              `narrow the region, or turn off SCRAPE_CONTACTS to finish inside it.`
+            ))
+          }
+
+          if (signal) {
+            return reject(new Error(
+              `\`${command}\` was killed by ${signal} — stopped from outside this server ` +
+              `(a manual kill, or the machine running out of memory). ` +
+              `Prospects found before then are saved.`
+            ))
+          }
+
+          reject(new Error(`\`${command}\` exited with code ${code}`))
+        })
       })
-    })
+    } finally {
+      clearTimeout(killAt)
+      liveRuns.delete(stopRun)
+    }
 
     job.status = 'completed'
     job.endTime = new Date()
