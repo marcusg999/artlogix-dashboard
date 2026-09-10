@@ -839,7 +839,9 @@
 
         .contact-link:hover { text-decoration: underline; }
 
-        .value-cell {
+        /* A count of objects, not a price. Monospaced so the numbers line up
+           down the column and an outlier is visible at a glance. */
+        .pieces-cell {
             font-family: 'JetBrains Mono', monospace;
             color: var(--accent-primary);
             font-size: 0.82rem;
@@ -1053,7 +1055,7 @@
                             <th onclick="sortProspects('status')">Status ↕</th>
                             <th onclick="sortProspects('event_date')">Event date ↕</th>
                             <th>Contact</th>
-                            <th onclick="sortProspects('estimated_value')">Value ↕</th>
+                            <th onclick="sortProspects('piece_count')">Pieces ↕</th>
                             <th onclick="sortProspects('timeline_months')">Timeline ↕</th>
                         </tr>
                     </thead>
@@ -1245,7 +1247,8 @@
                 // Only worth printing when it is somewhere other than the website.
                 if (source && source !== site) facts.push(`Source: ${websiteLabel(source)}`);
                 if (emails.length > 1) facts.push(`Also: ${emails.slice(1).join(', ')}`);
-                if (p.estimated_value) facts.push(`Est. ${'$' + Number(p.estimated_value).toLocaleString()}`);
+                const pieceCount = Number(p.piece_count);
+                if (pieceCount > 0) facts.push(`${pieceCount.toLocaleString()} piece${pieceCount === 1 ? '' : 's'}`);
                 if (p.timeline_months) facts.push(`${p.timeline_months} mo out`);
 
                 const detail = [facts.join('   ·   '), descriptionOf(p)]
@@ -1852,7 +1855,12 @@
                 const score = p.lead_score ?? 0;
                 const scoreClass = score >= 90 ? 'score-hot' : score >= 80 ? 'score-warm' : 'score-new';
                 const statusClass = p.status === 'Hot Lead' ? 'status-hot' : p.status === 'Qualified' ? 'status-qualified' : 'status-new';
-                const value = p.estimated_value ? '$' + Number(p.estimated_value).toLocaleString() : '—';
+                // How many objects are moving — the only real number behind the
+                // column that used to read "Value". That figure was piece_count
+                // times a flat 3500 invented by the agents: no vendor quoted it and
+                // no scraped page carried it, so printing it as dollars implied a
+                // price that never existed.
+                const pieces = Number(p.piece_count) > 0 ? Number(p.piece_count).toLocaleString() : '—';
                 const timeline = p.timeline_months ? p.timeline_months + 'mo' : '—';
                 const person = contactPersonOf(p);
                 const contactLines = [];
@@ -1912,7 +1920,7 @@
                     <td><span class="status-pill ${statusClass}">${p.status || '—'}</span></td>
                     <td class="event-cell">${eventDateOf(p) || '—'}</td>
                     <td>${contact}</td>
-                    <td class="value-cell">${value}</td>
+                    <td class="pieces-cell">${pieces}</td>
                     <td>${timeline}</td>
                 </tr>`;
             }).join('');
